@@ -6,6 +6,7 @@ import com.google.gson.stream.JsonReader;
 import com.hardrock.modwhitelist.network.Net;
 import com.hardrock.modwhitelist.network.packet.ModScanRequestPacket;
 import com.hardrock.modwhitelist.network.packet.ModScanResponsePacket;
+import com.hardrock.modwhitelist.network.packet.ModScanChunkPacket;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -40,7 +41,7 @@ public final class Modwhitelist {
             .create();
 
     // Pending nonce per player for scan request correlation
-    private static final Map<UUID, Pending> PENDING = new ConcurrentHashMap<>();
+    private static final Map<UUID, PendingScan> PENDING = new ConcurrentHashMap<>();
 
     // Loaded config singleton
     private static volatile Config config;
@@ -91,44 +92,68 @@ public final class Modwhitelist {
         long nonce = new Random().nextLong();
         if (nonce == 0L) nonce = 1L;
 
-        PENDING.put(sp.getUUID(), new Pending(nonce, Instant.now().toEpochMilli()));
+        PENDING.put(sp.getUUID(), new PendingScan(nonce, Instant.now().toEpochMilli()));
 
         Net.sendTo(sp, new ModScanRequestPacket(nonce));
     }
-
+    @SubscribeEvent
+    public void onLogout(PlayerEvent.PlayerLoggedOutEvent e) {
+        PENDING.remove(e.getEntity().getUUID());
+    }
     // ------------------------------------------------------------
     // Called by Net on server thread (enqueueWork)
     // ------------------------------------------------------------
-    public static void handleScanResponse(ServerPlayer sp, ModScanResponsePacket pkt) {
+
+    public static void handleScanChunk(ServerPlayer sp, ModScanChunkPacket pkt) {
         if (sp == null) return;
         if (config == null) loadConfig();
         Config cfg = config;
         if (cfg == null) return;
 
-        Pending pending = PENDING.remove(sp.getUUID());
+        PendingScan pending = PENDING.get(sp.getUUID());
         if (pending == null) {
             kick(sp, "Missing server scan context.\nPlease rejoin.");
             return;
         }
 
-        // Expire pending quickly (prevents replay)
         long ageMs = Instant.now().toEpochMilli() - pending.createdAtMs;
         if (ageMs > 60_000L) {
+            PENDING.remove(sp.getUUID());
             kick(sp, "Client scan timed out.\nPlease rejoin.");
             return;
         }
 
         if (pending.nonce != pkt.nonce()) {
+            PENDING.remove(sp.getUUID());
             kick(sp, "Client scan nonce mismatch.\nPlease rejoin.");
             return;
         }
 
-        // If strict=false: allow but keep deny enforcement optional (matches Neo behavior: strict governs enforcement)
-        if (!cfg.strict) {
-            // Still apply DENY if you want; Neo version applies deny inside strict path.
-            // We keep it aligned: strict=false => no enforcement at all.
+        pending.modIds.addAll(pkt.modIds());
+        for (ModScanChunkPacket.FileHash f : pkt.files()) {
+            if (f != null) {
+                pending.files.add(new ModScanResponsePacket.FileHash(f.name(), f.sha256()));
+            }
+        }
+
+        if (!pkt.done()) {
             return;
         }
+
+        PENDING.remove(sp.getUUID());
+        handleScanResponse(sp, new ModScanResponsePacket(
+                pending.nonce,
+                List.copyOf(pending.modIds),
+                List.copyOf(pending.files)
+        ));
+    }
+
+    public static void handleScanResponse(ServerPlayer sp, ModScanResponsePacket pkt) {
+        if (sp == null) return;
+        if (config == null) loadConfig();
+        Config cfg = config;
+        if (cfg == null) return;
+        boolean enforce = cfg.strict;
 
         // ------------------------------------------------------------
         // 0) Deny list with globs
@@ -142,8 +167,8 @@ public final class Modwhitelist {
                 .filter(id -> idMatchesAnyGlob(id, cfg.denyLower()))
                 .toList();
 
-        if (!foundDenied.isEmpty()) {
-            kick(sp, "Disallowed mods detected:\n- " + String.join("\n- ", foundDenied));
+        if (enforce && !foundDenied.isEmpty()) {
+        kick(sp, "Disallowed mods detected:\n- " + String.join("\n- ", foundDenied));
             return;
         }
 
@@ -161,7 +186,7 @@ public final class Modwhitelist {
                 .filter(req -> !clientIds.contains(req))
                 .toList();
 
-        if (!missingRequired.isEmpty()) {
+        if (enforce && !missingRequired.isEmpty()) {
             kickWithPack(sp, cfg, "Missing required mods:\n- " + String.join("\n- ", missingRequired));
             return;
         }
@@ -191,7 +216,7 @@ public final class Modwhitelist {
                     collectedAnything = true;
                 }
             }
-        } else {
+        } else if (enforce) {
             if (!extras.isEmpty()) {
                 kickWithPack(sp, cfg,
                         "You have not allowed mods:\n- " + String.join("\n- ", extras));
@@ -218,7 +243,7 @@ public final class Modwhitelist {
                     .filter(name -> !gotFiles.containsKey(name))
                     .toList();
 
-            if (!missing.isEmpty()) {
+            if (enforce && !missing.isEmpty()) {
                 kickWithPack(sp, cfg,
                         "Missing required mod files:\n- " + String.join("\n- ", missing));
                 return;
@@ -232,7 +257,7 @@ public final class Modwhitelist {
                     .map(Map.Entry::getKey)
                     .toList();
 
-            if (!mismatch.isEmpty()) {
+            if (enforce && !mismatch.isEmpty()) {
                 kickWithPack(sp, cfg,
                         "Mod file hash mismatch:\n- " + String.join("\n- ", mismatch));
                 return;
@@ -245,7 +270,7 @@ public final class Modwhitelist {
                     .map(Map.Entry::getKey)
                     .toList();
 
-            if (!optMismatch.isEmpty()) {
+            if (enforce && !optMismatch.isEmpty()) {
                 kickWithPack(sp, cfg,
                         "Client-only mod file hash mismatch:\n- " + String.join("\n- ", optMismatch));
                 return;
@@ -271,7 +296,7 @@ public final class Modwhitelist {
                     }
                     LOGGER.warn("[Modwhitelist] Collected {} client-only files from {}",
                             extraFiles.size(), sp.getGameProfile().getName());
-                } else {
+                } else if (enforce) {
                     kickWithPack(sp, cfg,
                             "Extra mod files detected:\n- " + extraFiles.stream()
                                     .map(Map.Entry::getKey)
@@ -595,7 +620,17 @@ public final class Modwhitelist {
         return sb.toString();
     }
 
-    private record Pending(long nonce, long createdAtMs) {}
+    private static final class PendingScan {
+        private final long nonce;
+        private final long createdAtMs;
+        private final List<String> modIds = new ArrayList<>();
+        private final List<ModScanResponsePacket.FileHash> files = new ArrayList<>();
+
+        private PendingScan(long nonce, long createdAtMs) {
+            this.nonce = nonce;
+            this.createdAtMs = createdAtMs;
+        }
+    }
 
     // ------------------------------------------------------------
     // Config model (matches Neo logic)
@@ -604,6 +639,12 @@ public final class Modwhitelist {
         public List<String> _comment = new ArrayList<>();
 
         public boolean strict = true;
+        public boolean strictFiles = true;
+        public String packLink = "";
+        public String customMessage = "";
+        public boolean collectClientOnly = false;
+        public List<String> collectWhitelist = new ArrayList<>();
+
 
         /** Required mod IDs (players must have them). Version is informational. */
         public List<Item> allowed = new ArrayList<>();
@@ -614,26 +655,12 @@ public final class Modwhitelist {
         /** Hard-banned mod IDs (supports * and ? wildcards). */
         public List<String> deny = new ArrayList<>();
 
-        public String packLink = "";
-        public String customMessage = "";
-
-        /** Hardcore: enforce /mods folder via SHA-256 */
-        public boolean strictFiles = true;
-
         /** Required files (server pack) */
         public List<FileRule> allowedFiles = new ArrayList<>();
 
         /** Optional client-only files allowed in addition to allowedFiles */
         public List<FileRule> clientOnlyFiles = new ArrayList<>();
 
-        /**
-         * Collect-mode switch.
-         * IMPORTANT: The whitelist is ONLY in this config (no command for it).
-         */
-        public boolean collectClientOnly = false;
-
-        /** UUIDs allowed to collect client-only files while collectClientOnly=true */
-        public List<String> collectWhitelist = new ArrayList<>();
 
         public List<String> denyLower() {
             return deny.stream()
@@ -705,6 +732,13 @@ public final class Modwhitelist {
         normalizeAndSortConfig(c);
         saveConfig(c);
         config = c;
+    }
+
+    public static boolean isCollectClientOnly() {
+        Config cfg = config;
+        if (cfg == null) loadConfig();
+        cfg = config;
+        return cfg != null && cfg.collectClientOnly;
     }
 
 }

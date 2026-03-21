@@ -14,73 +14,68 @@ public final class CommandHandler {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher().register(
-                Commands.literal("modwhitelist")
-                        .requires(CommandHandler::isAdmin)
+                        Commands.literal("modwhitelist")
+                                .requires(CommandHandler::isAdmin)
 
-                        .then(Commands.literal("reload")
-                                .executes(ctx -> {
-                                    Modwhitelist.reloadConfig();
-                                    ctx.getSource().sendSuccess(() ->
-                                            Component.literal("[Modwhitelist] Config reloaded."),
+                                .then(Commands.literal("reload")
+                                        .executes(ctx -> {
+                                            Modwhitelist.reloadConfig();
+                                            ctx.getSource().sendSuccess(() ->
+                                                            Component.literal("[Modwhitelist] Config reloaded."),
+                                                    true
+                                            );
+                                            return 1;
+                                        })
+                                )
+
+                                .then(Commands.literal("generate")
+                                        .executes(ctx -> {
+                                            try {
+                                                Modwhitelist.generateAndWriteHardcoreConfig();
+
+                                                // reload to reflect the saved file (optional, but clean)
+                                                Modwhitelist.reloadConfig();
+
+                                                Modwhitelist.Config c = getCurrentConfigForInfo();
+                                                int allowed = (c == null || c.allowed == null) ? 0 : c.allowed.size();
+                                                int files = (c == null || c.allowedFiles == null) ? 0 : c.allowedFiles.size();
+
+                                                ctx.getSource().sendSuccess(() ->
+                                                                Component.literal(
+                                                                        "[Modwhitelist] Generated and wrote modwhitelist.json. allowed=" + allowed + ", allowedFiles=" + files
+                                                                ),
+                                                        true
+                                                );
+                                            } catch (Exception ex) {
+                                                ctx.getSource().sendFailure(
+                                                        Component.literal("[Modwhitelist] Generate failed: " + ex.getMessage())
+                                                );
+                                            }
+                                            return 1;
+                                        })
+                                )
+
+                                .then(Commands.literal("collectclientonly").executes(ctx -> {
+                                    boolean enabled = !Modwhitelist.isCollectClientOnly();
+
+                                    Modwhitelist.setCollectClientOnly(enabled);
+                                    Modwhitelist.setStrict(!enabled);
+
+                                    ctx.getSource().sendSuccess(
+                                            () -> Component.literal("[Modwhitelist] collectClientOnly " + (enabled ? "enabled." : "disabled.")),
                                             true
                                     );
                                     return 1;
-                                })
-                        )
-
-                        .then(Commands.literal("generate")
-                                .executes(ctx -> {
-                                    try {
-                                        Modwhitelist.generateAndWriteHardcoreConfig();
-
-                                        // reload to reflect the saved file (optional, but clean)
-                                        Modwhitelist.reloadConfig();
-
-                                        Modwhitelist.Config c = getCurrentConfigForInfo();
-                                        int allowed = (c == null || c.allowed == null) ? 0 : c.allowed.size();
-                                        int files = (c == null || c.allowedFiles == null) ? 0 : c.allowedFiles.size();
-
-                                        ctx.getSource().sendSuccess(() ->
-                                                Component.literal(
-                                                        "[Modwhitelist] Generated and wrote modwhitelist.json. allowed=" + allowed + ", allowedFiles=" + files
-                                                ),
-                                                true
-                                        );
-                                    } catch (Exception ex) {
-                                        ctx.getSource().sendFailure(
-                                                Component.literal("[Modwhitelist] Generate failed: " + ex.getMessage())
-                                        );
-                                    }
-                                    return 1;
-                                })
-                        )
-
-
-
-                        .then(Commands.literal("collectclientonly")
-                                .then(Commands.literal("on").executes(ctx -> {
-                                    Modwhitelist.setCollectClientOnly(true);
-                                    Modwhitelist.setStrict(false);
-                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly enabled."), true);
-                                    return 1;
                                 }))
-                                .then(Commands.literal("off").executes(ctx -> {
-                                    Modwhitelist.setCollectClientOnly(false);
-                                    Modwhitelist.setStrict(true);
 
-                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly disabled."), true);
-                                    return 1;
-                                }))
-                        )
-
-                        .then(Commands.literal("clear")
-                                .executes(ctx -> {
-                                    Modwhitelist.clearClientOnlyFiles();
-                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared clientOnlyFiles."), true);
-                                    return 1;
-                                })
-                        )
-        );
+                .then(Commands.literal("clear")
+                        .executes(ctx -> {
+                            Modwhitelist.clearClientOnlyFiles();
+                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared clientOnlyFiles."), true);
+                            return 1;
+                        })
+                )
+            );
     }
 
     private static boolean isAdmin(CommandSourceStack src) {
