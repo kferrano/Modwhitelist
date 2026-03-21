@@ -1,0 +1,78 @@
+package com.hardrock.modwhitelist;
+
+import com.mojang.logging.LogUtils;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import org.slf4j.Logger;
+
+public final class CommandHandler {
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    private CommandHandler() {}
+
+    @SubscribeEvent
+    public static void onRegisterCommands(RegisterCommandsEvent event) {
+        event.getDispatcher().register(
+                Commands.literal("modwhitelist")
+                        .requires(CommandHandler::isAdmin)
+
+                        .then(Commands.literal("reload")
+                                .executes(ctx -> {
+                                    Modwhitelist.reloadConfig();
+                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Config reloaded."), true);
+                                    return 1;
+                                })
+                        )
+
+                        .then(Commands.literal("generate")
+                                .executes(ctx -> {
+                                    // Generates config from server mods; reports success/failure
+                                    try {
+                                        Modwhitelist.Config gen = Modwhitelist.generateHardcoreConfigForCommand();
+                                        Modwhitelist.writeConfig(gen);
+                                        ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Generated config from current server mods."), true);
+                                        return 1;
+                                    } catch (Exception e) {
+                                        LOGGER.error("[Modwhitelist] Failed to generate config", e);
+                                        ctx.getSource().sendFailure(Component.literal("[Modwhitelist] Failed to generate config. Check server log."));
+                                        return 0;
+                                    }
+                                })
+                        )
+
+                        // Registers subcommand to enable client‑only collection
+                        .then(Commands.literal("collectclientonly")
+                                .then(Commands.literal("on")
+                                        .executes(ctx -> {
+                                            Modwhitelist.setCollectClientOnly(true);
+                                            Modwhitelist.setStrict(false);
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly = true (whitelist still enforced via config)"), true);
+                                            return 1;
+                                        })
+                                )
+                                .then(Commands.literal("off")
+                                        .executes(ctx -> {
+                                            Modwhitelist.setCollectClientOnly(false);
+                                            Modwhitelist.setStrict(true);
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly = false"), true);
+                                            return 1;
+                                        })
+                                )
+                                .then(Commands.literal("clear")
+                                        .executes(ctx -> {
+                                            Modwhitelist.clearClientOnlyFiles();
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared clientOnlyFiles."), true);
+                                            return 1;
+                                        })
+                                )
+                        )
+        );
+    }
+
+    private static boolean isAdmin(CommandSourceStack src) {
+        return src.hasPermission(3);
+    }
+}
