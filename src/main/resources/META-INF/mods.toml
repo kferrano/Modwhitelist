@@ -1,0 +1,37 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+side = "BOTH"
+description = '''Mod Whitelist is a server-authoritative modpack enforcement utility for Minecraft 1.18.x+ (Forge).
+
+Due to changes in modern Minecraft networking, reliable client mod verification
+is no longer possible using a server-only approach.
+This mod therefore uses a lightweight client-side companion to securely verify
+loaded mods and optional file integrity.
+
+Features include required and denied mod enforcement, strict mode,
+optional client-only mod support, SHA-256 file verification,
+automatic modpack generation, and a safe setup/collection workflow.
+
+This project is the official successor to Mod Whitelist (Server) for modern Minecraft versions.
+No analytics, no tracking, and no third-party services are used.'''
+
+[[dependencies."${mod_id}"]]
+modId = "forge"
+mandatory = true
+versionRange = "${forge_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies."${mod_id}"]]
+modId = "minecraft"
+mandatory = true
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
