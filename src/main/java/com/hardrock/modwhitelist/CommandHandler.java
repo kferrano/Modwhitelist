@@ -22,49 +22,45 @@ public final class CommandHandler {
                         .then(Commands.literal("reload")
                                 .executes(ctx -> {
                                     Modwhitelist.reloadConfig();
-                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Config reloaded."), true);
+                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Configs reloaded."), true);
                                     return 1;
                                 })
                         )
 
-                        .then(Commands.literal("generate")
+                        .then(Commands.literal("init")
                                 .executes(ctx -> {
-                                    // Generates config from server mods; reports success/failure
                                     try {
-                                        Modwhitelist.Config gen = Modwhitelist.generateHardcoreConfigForCommand();
-                                        Modwhitelist.writeConfig(gen);
-                                        ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Generated config from current server mods."), true);
+                                        Modwhitelist.initializeEmptyConfigs();
+                                        ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Initialized multi-file configs."), true);
                                         return 1;
                                     } catch (Exception e) {
-                                        LOGGER.error("[Modwhitelist] Failed to generate config", e);
-                                        ctx.getSource().sendFailure(Component.literal("[Modwhitelist] Failed to generate config. Check server log."));
+                                        LOGGER.error("[Modwhitelist] Failed to initialize configs", e);
+                                        ctx.getSource().sendFailure(Component.literal("[Modwhitelist] Failed to initialize configs. Check server log."));
                                         return 0;
                                     }
                                 })
                         )
 
-                        // Registers subcommand to enable client‑only collection
-                        .then(Commands.literal("collectclientonly")
+                        .then(Commands.literal("collect")
                                 .then(Commands.literal("on")
                                         .executes(ctx -> {
-                                            Modwhitelist.setCollectClientOnly(true);
-                                            Modwhitelist.setStrict(false);
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly = true (whitelist still enforced via config)"), true);
+                                            Modwhitelist.setCollectMode(true);
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectMode = true (strict=false)"), true);
                                             return 1;
                                         })
                                 )
                                 .then(Commands.literal("off")
                                         .executes(ctx -> {
-                                            Modwhitelist.setCollectClientOnly(false);
+                                            Modwhitelist.setCollectMode(false);
                                             Modwhitelist.setStrict(true);
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectClientOnly = false"), true);
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectMode = false"), true);
                                             return 1;
                                         })
                                 )
                                 .then(Commands.literal("clear")
                                         .executes(ctx -> {
-                                            Modwhitelist.clearClientOnlyFiles();
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared clientOnlyFiles."), true);
+                                            Modwhitelist.clearAutoCollectedManifests();
+                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared both_side_required, client_optional and server_only."), true);
                                             return 1;
                                         })
                                 )
