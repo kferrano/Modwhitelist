@@ -1,6 +1,7 @@
 package com.hardrock.modwhitelist.network;
 
 import com.hardrock.modwhitelist.Modwhitelist;
+import com.hardrock.modwhitelist.network.payload.ModScanChunkPayload;
 import com.hardrock.modwhitelist.network.payload.ModScanRequestPayload;
 import com.hardrock.modwhitelist.network.payload.ModScanResponsePayload;
 import com.mojang.logging.LogUtils;
@@ -19,21 +20,21 @@ import java.util.stream.Collectors;
 
 public final class Net {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final int MAX_PACKET_BYTES = 24_000;
 
     private Net() {}
 
-    public static final String PROTOCOL = "1";
+    public static final String PROTOCOL = "2";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
         final PayloadRegistrar registrar = event.registrar(PROTOCOL);
 
-        // Server -> Client (Request). Handler MUSS existieren (NeoForge 1.21.1)
+        // Server -> Client (Request)
         registrar.playToClient(
                 ModScanRequestPayload.TYPE,
                 ModScanRequestPayload.STREAM_CODEC,
                 (payload, ctx) -> {
-                    // Läuft nur auf dem Client, wenn der Server den Request sendet
                     try {
                         List<String> modIds = ModList.get().getMods().stream()
                                 .map(m -> m.getModId())
@@ -45,23 +46,20 @@ public final class Net {
 
                         List<ModScanResponsePayload.FileHash> files = scanModsFolder();
 
-                        PacketDistributor.sendToServer(
-                                new ModScanResponsePayload(payload.nonce(), modIds, files)
-                        );
+                        sendChunkedResponse(payload.nonce(), modIds, files);
                     } catch (Exception ex) {
                         LOGGER.error("[Modwhitelist] Client scan failed", ex);
-                        // Server kann optional später timeouten/kicken, falls keine Antwort kommt
                     }
                 }
         );
 
-        // Client -> Server (Response)
+        // Client -> Server (Chunked response)
         registrar.playToServer(
-                ModScanResponsePayload.TYPE,
-                ModScanResponsePayload.STREAM_CODEC,
+                ModScanChunkPayload.TYPE,
+                ModScanChunkPayload.STREAM_CODEC,
                 (payload, ctx) -> {
                     if (ctx.player() instanceof net.minecraft.server.level.ServerPlayer sp) {
-                        Modwhitelist.handleScanResponse(sp, payload);
+                        Modwhitelist.handleScanChunk(sp, payload);
                     }
                 }
         );
@@ -69,6 +67,51 @@ public final class Net {
 
     public static void sendScanRequest(net.minecraft.server.level.ServerPlayer player, long nonce) {
         PacketDistributor.sendToPlayer(player, new ModScanRequestPayload(nonce));
+    }
+
+    private static void sendChunkedResponse(long nonce,
+                                            List<String> modIds,
+                                            List<ModScanResponsePayload.FileHash> files) {
+        List<String> modChunk = new ArrayList<>();
+        List<ModScanResponsePayload.FileHash> fileChunk = new ArrayList<>();
+        int estimatedBytes = ModScanChunkPayload.basePacketBytes();
+
+        for (String modId : modIds) {
+            int itemBytes = ModScanChunkPayload.estimateModIdBytes(modId);
+            if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
+                flushChunk(nonce, false, modChunk, fileChunk);
+                estimatedBytes = ModScanChunkPayload.basePacketBytes();
+            }
+            modChunk.add(modId);
+            estimatedBytes += itemBytes;
+        }
+
+        for (ModScanResponsePayload.FileHash file : files) {
+            int itemBytes = ModScanChunkPayload.estimateFileBytes(file);
+            if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
+                flushChunk(nonce, false, modChunk, fileChunk);
+                estimatedBytes = ModScanChunkPayload.basePacketBytes();
+            }
+            fileChunk.add(file);
+            estimatedBytes += itemBytes;
+        }
+
+        flushChunk(nonce, true, modChunk, fileChunk);
+    }
+
+    private static void flushChunk(long nonce,
+                                   boolean done,
+                                   List<String> modChunk,
+                                   List<ModScanResponsePayload.FileHash> fileChunk) {
+        PacketDistributor.sendToServer(new ModScanChunkPayload(
+                nonce,
+                done,
+                List.copyOf(modChunk),
+                List.copyOf(fileChunk)
+        ));
+
+        modChunk.clear();
+        fileChunk.clear();
     }
 
     private static List<ModScanResponsePayload.FileHash> scanModsFolder() throws Exception {
