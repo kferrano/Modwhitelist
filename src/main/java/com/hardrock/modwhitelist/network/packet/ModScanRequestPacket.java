@@ -1,24 +1,60 @@
 package com.hardrock.modwhitelist.network.packet;
 
 import com.hardrock.modwhitelist.network.client.ClientHandlers;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraftforge.network.NetworkEvent;
 
-import java.util.function.Supplier;
+import cpw.mods.fml.common.network.simpleimpl.IMessage;
+import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
+import cpw.mods.fml.common.network.simpleimpl.MessageContext;
 
-public record ModScanRequestPacket(long nonce) {
+import io.netty.buffer.ByteBuf;
 
-    public static void encode(ModScanRequestPacket pkt, FriendlyByteBuf buf) {
-        buf.writeLong(pkt.nonce);
+public final class ModScanRequestPacket implements IMessage {
+
+    private long nonce;
+
+    public ModScanRequestPacket() {}
+
+    public ModScanRequestPacket(long nonce) {
+        this.nonce = nonce;
     }
 
-    public static ModScanRequestPacket decode(FriendlyByteBuf buf) {
-        return new ModScanRequestPacket(buf.readLong());
+    public long nonce() {
+        return nonce;
     }
 
-    public static void handle(ModScanRequestPacket pkt, Supplier<NetworkEvent.Context> ctxSup) {
-        NetworkEvent.Context ctx = ctxSup.get();
-        ctx.enqueueWork(() -> ClientHandlers.onScanRequest(pkt.nonce));
-        ctx.setPacketHandled(true);
+    @Override
+    public void fromBytes(ByteBuf buf) {
+        nonce = buf.readLong();
+    }
+
+    @Override
+    public void toBytes(ByteBuf buf) {
+        buf.writeLong(nonce);
+    }
+
+    public static final class Handler
+            implements IMessageHandler<ModScanRequestPacket, IMessage> {
+
+        @Override
+        public IMessage onMessage(
+                final ModScanRequestPacket pkt,
+                MessageContext ctx
+        ) {
+            /*
+             * Hashing kann bei großen Packs dauern.
+             * Nicht den Netty-Thread damit blockieren.
+             */
+            Thread scanThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    ClientHandlers.onScanRequest(pkt.nonce());
+                }
+            }, "ModWhitelist-Scan");
+
+            scanThread.setDaemon(true);
+            scanThread.start();
+
+            return null;
+        }
     }
 }

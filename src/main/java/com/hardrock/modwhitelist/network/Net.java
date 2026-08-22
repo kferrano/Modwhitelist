@@ -3,50 +3,40 @@ package com.hardrock.modwhitelist.network;
 import com.hardrock.modwhitelist.Modwhitelist;
 import com.hardrock.modwhitelist.network.packet.ModScanChunkPacket;
 import com.hardrock.modwhitelist.network.packet.ModScanRequestPacket;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.fml.DistExecutor;
-import net.minecraftforge.network.NetworkRegistry;
-import net.minecraftforge.network.PacketDistributor;
-import net.minecraftforge.network.simple.SimpleChannel;
+
+import cpw.mods.fml.common.network.NetworkRegistry;
+import cpw.mods.fml.common.network.simpleimpl.IMessage;
+import cpw.mods.fml.common.network.simpleimpl.SimpleNetworkWrapper;
+import cpw.mods.fml.relauncher.Side;
+
+import net.minecraft.entity.player.EntityPlayerMP;
 
 public final class Net {
-    private static final String PROTOCOL = "2";
+
     private static int id = 0;
 
-    public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            ResourceLocation.tryBuild(Modwhitelist.MODID, "main"),
-            () -> PROTOCOL,
-            PROTOCOL::equals,
-            PROTOCOL::equals
-    );
+    public static final SimpleNetworkWrapper CHANNEL =
+            NetworkRegistry.INSTANCE.newSimpleChannel(Modwhitelist.MODID);
 
     private Net() {}
 
     public static void init() {
         CHANNEL.registerMessage(
-                id++,
+                ModScanRequestPacket.Handler.class,
                 ModScanRequestPacket.class,
-                ModScanRequestPacket::encode,
-                ModScanRequestPacket::decode,
-                ModScanRequestPacket::handle
+                id++,
+                Side.CLIENT
         );
 
         CHANNEL.registerMessage(
-                id++,
+                ModScanChunkPacket.Handler.class,
                 ModScanChunkPacket.class,
-                ModScanChunkPacket::encode,
-                ModScanChunkPacket::decode,
-                ModScanChunkPacket::handle
-        );
-
-        DistExecutor.safeRunWhenOn(Dist.CLIENT,
-                () -> com.hardrock.modwhitelist.network.client.ClientHandlers::init
+                id++,
+                Side.SERVER
         );
     }
 
-    public static void sendTo(ServerPlayer player, Object msg) {
-        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), msg);
+    public static void sendTo(EntityPlayerMP player, IMessage msg) {
+        CHANNEL.sendTo(msg, player);
     }
 }

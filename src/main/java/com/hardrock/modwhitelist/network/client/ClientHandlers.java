@@ -2,8 +2,10 @@ package com.hardrock.modwhitelist.network.client;
 
 import com.hardrock.modwhitelist.network.Net;
 import com.hardrock.modwhitelist.network.packet.ModScanChunkPacket;
-import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.loading.FMLPaths;
+import cpw.mods.fml.common.Loader;
+import cpw.mods.fml.common.ModContainer;
+
+import java.util.stream.Collectors;
 
 import java.io.InputStream;
 import java.nio.file.*;
@@ -23,16 +25,28 @@ public final class ClientHandlers {
 
     public static void onScanRequest(long nonce) {
         // 1) Mod IDs
-        List<String> ids = ModList.get().getMods().stream()
-                .map(m -> m.getModId())
+        List<String> ids = Loader.instance()
+                .getModList()
+                .stream()
+                .map(ModContainer::getModId)
                 .distinct()
                 .sorted(String::compareToIgnoreCase)
-                .toList();
+                .collect(Collectors.toList());
 
         // 2) /mods file list (jar/zip) with sha256
         List<ModScanChunkPacket.FileHash> files = new ArrayList<>();
         try {
-            Path modsDir = FMLPaths.MODSDIR.get();
+            Path modsDir = Loader.instance()
+                    .getConfigDir()
+                    .toPath()
+                    .getParent()
+                    .resolve("mods");
+            scanDirectory(modsDir, "", files);
+            scanDirectory(
+                    modsDir.resolve("1.7.10"),
+                    "1.7.10/",
+                    files
+            );
             if (Files.isDirectory(modsDir)) {
                 try (DirectoryStream<Path> ds = Files.newDirectoryStream(modsDir)) {
                     for (Path p : ds) {
@@ -50,6 +64,33 @@ public final class ClientHandlers {
         files.sort(Comparator.comparing(f -> f.name().toLowerCase()));
 
         sendChunkedResponse(nonce, ids, files);
+    }
+    private static void scanDirectory(
+            Path dir,
+            String prefix,
+            List<ModScanChunkPacket.FileHash> files
+    ) throws Exception {
+
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            for (Path p : ds) {
+                if (!Files.isRegularFile(p)) continue;
+
+                String name = p.getFileName().toString();
+
+                if (!(name.endsWith(".jar") || name.endsWith(".zip"))) {
+                    continue;
+                }
+
+                files.add(new ModScanChunkPacket.FileHash(
+                        prefix + name,
+                        sha256Hex(p)
+                ));
+            }
+        }
     }
 
     private static void sendChunkedResponse(long nonce, List<String> ids, List<ModScanChunkPacket.FileHash> files) {
@@ -87,8 +128,8 @@ public final class ClientHandlers {
         Net.CHANNEL.sendToServer(new ModScanChunkPacket(
                 nonce,
                 done,
-                List.copyOf(modChunk),
-                List.copyOf(fileChunk)
+                new ArrayList<String>(modChunk),
+                new ArrayList<ModScanChunkPacket.FileHash>(fileChunk)
         ));
 
         modChunk.clear();

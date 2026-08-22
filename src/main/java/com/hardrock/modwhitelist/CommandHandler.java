@@ -1,72 +1,127 @@
 package com.hardrock.modwhitelist;
 
-import com.mojang.logging.LogUtils;
-import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.Commands;
-import net.minecraft.network.chat.Component;
-import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import org.slf4j.Logger;
+import net.minecraft.command.CommandBase;
+import net.minecraft.command.ICommandSender;
+import net.minecraft.util.ChatComponentText;
 
-public final class CommandHandler {
-    private static final Logger LOGGER = LogUtils.getLogger();
+public final class CommandHandler extends CommandBase {
 
-    @SubscribeEvent
-    public void onRegisterCommands(RegisterCommandsEvent event) {
-        event.getDispatcher().register(
-                Commands.literal("modwhitelist")
-                        .requires(CommandHandler::isAdmin)
-
-                        .then(Commands.literal("reload")
-                                .executes(ctx -> {
-                                    Modwhitelist.reloadConfig();
-                                    ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Configs reloaded."), true);
-                                    return 1;
-                                })
-                        )
-
-                        .then(Commands.literal("init")
-                                .executes(ctx -> {
-                                    try {
-                                        Modwhitelist.initializeEmptyConfigs();
-                                        ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Initialized multi-file configs."), true);
-                                        return 1;
-                                    } catch (Exception e) {
-                                        LOGGER.error("[Modwhitelist] Failed to initialize configs", e);
-                                        ctx.getSource().sendFailure(Component.literal("[Modwhitelist] Failed to initialize configs. Check server log."));
-                                        return 0;
-                                    }
-                                })
-                        )
-
-                        .then(Commands.literal("collect")
-                                .then(Commands.literal("on")
-                                        .executes(ctx -> {
-                                            Modwhitelist.setCollectMode(true);
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectMode = true (strict=false)"), true);
-                                            return 1;
-                                        })
-                                )
-                                .then(Commands.literal("off")
-                                        .executes(ctx -> {
-                                            Modwhitelist.setCollectMode(false);
-                                            Modwhitelist.setStrict(true);
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] collectMode = false"), true);
-                                            return 1;
-                                        })
-                                )
-                                .then(Commands.literal("clear")
-                                        .executes(ctx -> {
-                                            Modwhitelist.clearAutoCollectedManifests();
-                                            ctx.getSource().sendSuccess(() -> Component.literal("[Modwhitelist] Cleared both_side_required, client_optional and server_only."), true);
-                                            return 1;
-                                        })
-                                )
-                        )
-        );
+    @Override
+    public String getCommandName() {
+        return "modwhitelist";
     }
 
-    private static boolean isAdmin(CommandSourceStack src) {
-        return src.hasPermission(3);
+    @Override
+    public String getCommandUsage(ICommandSender sender) {
+        return "/modwhitelist <reload|init|collect on|off|clear>";
+    }
+
+    @Override
+    public int getRequiredPermissionLevel() {
+        return 3;
+    }
+
+    @Override
+    public void processCommand(
+            ICommandSender sender,
+            String[] args
+    ) {
+        if (args.length == 0) {
+            sender.addChatMessage(
+                    new ChatComponentText(
+                            getCommandUsage(sender)
+                    )
+            );
+            return;
+        }
+
+        if ("reload".equalsIgnoreCase(args[0])) {
+            Modwhitelist.reloadConfig();
+
+            sender.addChatMessage(
+                    new ChatComponentText(
+                            "[ModWhitelist] Configs reloaded."
+                    )
+            );
+            return;
+        }
+
+        if ("init".equalsIgnoreCase(args[0])) {
+            try {
+                Modwhitelist.initializeEmptyConfigs();
+
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "[ModWhitelist] Configs initialized."
+                        )
+                );
+            } catch (Exception e) {
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "[ModWhitelist] Failed to initialize configs. Check server log."
+                        )
+                );
+            }
+
+            return;
+        }
+
+        if ("collect".equalsIgnoreCase(args[0])) {
+            if (args.length < 2) {
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "/modwhitelist collect <on|off|clear>"
+                        )
+                );
+                return;
+            }
+
+            if ("on".equalsIgnoreCase(args[1])) {
+                Modwhitelist.setCollectMode(true);
+
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "[ModWhitelist] collectMode = true"
+                        )
+                );
+                return;
+            }
+
+            if ("off".equalsIgnoreCase(args[1])) {
+                Modwhitelist.setCollectMode(false);
+                Modwhitelist.setStrict(true);
+
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "[ModWhitelist] collectMode = false, strict = true"
+                        )
+                );
+                return;
+            }
+
+            if ("clear".equalsIgnoreCase(args[1])) {
+                Modwhitelist.clearAutoCollectedManifests();
+
+                sender.addChatMessage(
+                        new ChatComponentText(
+                                "[ModWhitelist] Auto-collected manifests cleared."
+                        )
+                );
+                return;
+            }
+
+            sender.addChatMessage(
+                    new ChatComponentText(
+                            "/modwhitelist collect <on|off|clear>"
+                    )
+            );
+            return;
+        }
+
+        sender.addChatMessage(
+                new ChatComponentText(
+                        getCommandUsage(sender)
+                )
+        );
     }
 }
