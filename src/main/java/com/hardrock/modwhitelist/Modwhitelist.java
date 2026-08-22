@@ -175,6 +175,9 @@ public final class Modwhitelist {
             LOGGER.info("[ModWhitelist] Integrated server detected. ModWhitelist checks are disabled in singleplayer.");
             return;
         }
+
+        LOGGER.info("[ModWhitelist] Dedicated server detected. ModWhitelist checks are enabled.");
+
         loadConfig();
 
         RuntimeConfig cfg = runtimeConfig;
