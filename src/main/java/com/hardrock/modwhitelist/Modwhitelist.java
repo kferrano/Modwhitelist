@@ -42,7 +42,6 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -84,12 +83,12 @@ public final class Modwhitelist {
     private static final String CLIENT_OPTIONAL_FILE = "client_optional.json";
     private static final String SERVER_ONLY_FILE = "server_only.json";
     private static final String DENY_FILE = "deny.json";
-
     private static final SecureRandom RNG = new SecureRandom();
     private static final Object CONFIG_LOCK = new Object();
 
     private static volatile RuntimeConfig runtimeConfig;
     private static volatile ConfigPaths configPaths;
+    private static volatile boolean dedicatedServer = false;
 
     private static final Map<UUID, PendingScan> PENDING = new ConcurrentHashMap<>();
     public static void enqueueServerTask(Runnable task) {
@@ -170,6 +169,12 @@ public final class Modwhitelist {
     }
     @Mod.EventHandler
     public void onServerStarting(FMLServerStartingEvent event) {
+        dedicatedServer = event.getServer().isDedicatedServer();
+
+        if (!dedicatedServer) {
+            LOGGER.info("[ModWhitelist] Integrated server detected. ModWhitelist checks are disabled in singleplayer.");
+            return;
+        }
         loadConfig();
 
         RuntimeConfig cfg = runtimeConfig;
@@ -193,6 +198,10 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!dedicatedServer) {
+            return;
+        }
+
         if (!(event.player instanceof EntityPlayerMP)) {
             return;
         }
@@ -255,6 +264,10 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
+        if (!dedicatedServer) {
+            return;
+        }
+
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
