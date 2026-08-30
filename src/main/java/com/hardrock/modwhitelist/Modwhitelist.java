@@ -89,6 +89,7 @@ public final class Modwhitelist {
     private static volatile RuntimeConfig runtimeConfig;
     private static volatile ConfigPaths configPaths;
     private static volatile boolean dedicatedServer = false;
+    private static volatile boolean checksEnabled = false;
 
     private static final Map<UUID, PendingScan> PENDING = new ConcurrentHashMap<>();
     public static void enqueueServerTask(Runnable task) {
@@ -171,16 +172,28 @@ public final class Modwhitelist {
     public void onServerStarting(FMLServerStartingEvent event) {
         dedicatedServer = event.getServer().isDedicatedServer();
 
-        if (!dedicatedServer) {
+        loadConfig();
+
+        RuntimeConfig cfg = runtimeConfig;
+
+        boolean devMode = cfg != null && cfg.settings.singleplayerDevMode;
+
+        checksEnabled = dedicatedServer || devMode;
+
+        if (!checksEnabled) {
             LOGGER.info("[ModWhitelist] Integrated server detected. ModWhitelist checks are disabled in singleplayer.");
             return;
         }
 
-        LOGGER.info("[ModWhitelist] Dedicated server detected. ModWhitelist checks are enabled.");
-
-        loadConfig();
-
-        RuntimeConfig cfg = runtimeConfig;
+        if (dedicatedServer) {
+            LOGGER.info(
+                    "[Modwhitelist] Dedicated server detected. ModWhitelist checks are enabled."
+            );
+        } else {
+            LOGGER.warn(
+                    "[Modwhitelist] Integrated server detected with singleplayerDevMode=true. ModWhitelist checks are enabled for development/testing."
+            );
+        }
 
         if (cfg != null && !cfg.settings.strict) {
             LOGGER.warn(
@@ -201,7 +214,7 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
-        if (!dedicatedServer) {
+        if (!checksEnabled) {
             return;
         }
 
@@ -267,7 +280,7 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (!dedicatedServer) {
+        if (!checksEnabled) {
             return;
         }
 
@@ -1259,6 +1272,7 @@ public final class Modwhitelist {
         public boolean strict = true;
         public boolean strictFiles = true;
         public boolean collectMode = false;
+        public boolean singleplayerDevMode = false;
         public List<String> collectWhitelist = new ArrayList<>();
         public String customMessage = "Please use the official modpack.";
         public String packLink = "";
