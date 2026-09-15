@@ -104,6 +104,8 @@ public final class Modwhitelist {
         FMLCommonHandler.instance()
                 .bus()
                 .register(this);
+
+        ensureSettingsFile();
     }
     private static final class ConfigPaths {
 
@@ -1363,6 +1365,26 @@ public final class Modwhitelist {
         public static class FileRule {
             public String name;
             public String sha256;
+        }
+    }
+
+    private static void ensureSettingsFile() {
+        synchronized (CONFIG_LOCK) {
+            try {ConfigPaths paths = ensureConfigPaths();
+
+                Files.createDirectories(paths.dir());
+
+                if (!Files.exists(paths.settings()) && !Files.exists(paths.legacyFile())) {
+                    writeJson(
+                            paths.settings(),
+                            SettingsConfig.defaultConfig()
+                    );
+
+                    LOGGER.info("Created default settings file");
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to create default settings file", e);
+            }
         }
     }
 }
