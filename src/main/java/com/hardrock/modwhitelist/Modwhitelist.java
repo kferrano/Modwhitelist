@@ -68,6 +68,8 @@ public final class Modwhitelist {
 
     private static volatile RuntimeConfig runtimeConfig;
     private static volatile ConfigPaths configPaths;
+    private static volatile boolean dedicatedServer = false;
+    private static volatile boolean checksEnabled = false;
 
     private static final Map<UUID, PendingScan> PENDING = new ConcurrentHashMap<>();
 
@@ -75,12 +77,32 @@ public final class Modwhitelist {
         Net.init();
         MinecraftForge.EVENT_BUS.register(this);
         MinecraftForge.EVENT_BUS.register(new CommandHandler());
+        ensureSettingsFile();
     }
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
+        dedicatedServer =
+                event.getServer().isDedicatedServer();
+
         loadConfig();
         RuntimeConfig cfg = runtimeConfig;
+
+        boolean devMode = cfg != null && cfg.settings.singleplayerDevMode;
+
+        checksEnabled = dedicatedServer || devMode;
+
+        if (!checksEnabled) {
+            LOGGER.info("[Modwhitelist] Integrated server detected. ModWhitelist checks are disabled in singleplayer.");
+            return;
+        }
+
+        if (dedicatedServer) {
+            LOGGER.info("[Modwhitelist] Dedicated server detected. ModWhitelist checks are enabled.");
+        } else {
+            LOGGER.warn("[Modwhitelist] Integrated server detected with singleplayerDevMode=true. ModWhitelist checks are enabled for development/testing.");
+        }
+
         if (cfg != null && !cfg.settings.strict) {
             LOGGER.warn("[Modwhitelist] STRICT MODE IS DISABLED (strict=false).");
         }
@@ -91,6 +113,10 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!checksEnabled) {
+            return;
+        }
+
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
 
         if (runtimeConfig == null) loadConfig();
@@ -113,6 +139,10 @@ public final class Modwhitelist {
 
     @SubscribeEvent
     public void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (!checksEnabled) {
+            return;
+        }
+
         PENDING.remove(event.getEntity().getUUID());
     }
 
@@ -335,9 +365,10 @@ public final class Modwhitelist {
 
                 runtimeConfig = buildRuntimeConfig(settings, bothRequired, clientRequired, clientOptional, serverOnly, deny);
 
-                LOGGER.info("[Modwhitelist] Loaded configs: strict={}, strictFiles={}, collectMode={}, bothRequiredMods={}, clientRequiredMods={}, clientOptionalMods={}, serverOnlyMods={}, denyMods={}",
+                LOGGER.info("[Modwhitelist] Loaded configs: strict={}, strictFiles={}, singleplayerDevMode={}, collectMode={}, bothRequiredMods={}, clientRequiredMods={}, clientOptionalMods={}, serverOnlyMods={}, denyMods={}",
                         runtimeConfig.settings.strict,
                         runtimeConfig.settings.strictFiles,
+                        runtimeConfig.settings.singleplayerDevMode,
                         runtimeConfig.settings.collectMode,
                         runtimeConfig.bothRequired.mods.size(),
                         runtimeConfig.clientRequired.mods.size(),
@@ -920,6 +951,7 @@ public final class Modwhitelist {
         public boolean strict = true;
         public boolean strictFiles = true;
         public boolean collectMode = false;
+        public boolean singleplayerDevMode = false;
         public List<String> collectWhitelist = new ArrayList<>();
         public String customMessage = "Please use the official modpack.";
         public String packLink = "";
@@ -933,6 +965,11 @@ public final class Modwhitelist {
                     "- client_optional.json   = client-only mods/files that are allowed but optional",
                     "- server_only.json       = server-only mods/files for overview/setup",
                     "- deny.json              = hard block list",
+                    "",
+                    "Singleplayer development mode:",
+                    "- singleplayerDevMode=false disables ModWhitelist checks in normal singleplayer",
+                    "- singleplayerDevMode=true enables full ModWhitelist checks on integrated servers for development/testing",
+                    "- dedicated servers always have ModWhitelist checks enabled",
                     "",
                     "Collect workflow:",
                     "- set collectMode=true and add your UUID to collectWhitelist",
@@ -1010,6 +1047,39 @@ public final class Modwhitelist {
         public static class FileRule {
             public String name;
             public String sha256;
+        }
+    }
+
+    private static void ensureSettingsFile() {
+        synchronized (CONFIG_LOCK) {
+            try {
+                ConfigPaths paths = ensureConfigPaths();
+
+                Files.createDirectories(paths.dir());
+
+                /*
+                 * Legacy-Config nicht durch eine neue settings.json
+                 * blockieren, damit die Migration weiterhin funktioniert.
+                 */
+                if (!Files.exists(paths.settings())
+                        && !Files.exists(paths.legacyFile())) {
+
+                    writeJson(
+                            paths.settings(),
+                            SettingsConfig.defaultConfig()
+                    );
+
+                    LOGGER.info(
+                            "[Modwhitelist] Created default settings.json."
+                    );
+                }
+
+            } catch (Exception e) {
+                LOGGER.error(
+                        "[Modwhitelist] Failed to create default settings.json",
+                        e
+                );
+            }
         }
     }
 }
