@@ -17,28 +17,34 @@ public record ModScanResponsePacket(long nonce, List<String> modIds, List<FileHa
         buf.writeLong(pkt.nonce);
 
         buf.writeVarInt(pkt.modIds.size());
-        for (String s : pkt.modIds) buf.writeUtf(s == null ? "" : s);
+        for (String modId : pkt.modIds) {
+            buf.writeUtf(modId == null ? "" : modId);
+        }
 
         buf.writeVarInt(pkt.files.size());
-        for (FileHash f : pkt.files) {
-            buf.writeUtf(f == null || f.name() == null ? "" : f.name());
-            buf.writeUtf(f == null || f.sha256() == null ? "" : f.sha256());
+        for (FileHash file : pkt.files) {
+            buf.writeUtf(file == null || file.name() == null ? "" : file.name());
+            buf.writeUtf(file == null || file.sha256() == null ? "" : file.sha256());
         }
     }
 
     public static ModScanResponsePacket decode(FriendlyByteBuf buf) {
         long nonce = buf.readLong();
 
-        int m = buf.readVarInt();
-        List<String> modIds = new ArrayList<>(Math.max(0, m));
-        for (int i = 0; i < m; i++) modIds.add(buf.readUtf(32767));
+        int modCount = buf.readVarInt();
+        List<String> modIds = new ArrayList<>(Math.max(0, modCount));
 
-        int f = buf.readVarInt();
-        List<FileHash> files = new ArrayList<>(Math.max(0, f));
-        for (int i = 0; i < f; i++) {
+        for (int i = 0; i < modCount; i++) {
+            modIds.add(buf.readUtf(32767));
+        }
+
+        int fileCount = buf.readVarInt();
+        List<FileHash> files = new ArrayList<>(Math.max(0, fileCount));
+
+        for (int i = 0; i < fileCount; i++) {
             String name = buf.readUtf(32767);
-            String sha = buf.readUtf(32767);
-            files.add(new FileHash(name, sha));
+            String sha256 = buf.readUtf(32767);
+            files.add(new FileHash(name, sha256));
         }
 
         return new ModScanResponsePacket(nonce, modIds, files);
@@ -47,6 +53,7 @@ public record ModScanResponsePacket(long nonce, List<String> modIds, List<FileHa
     public static void handle(ModScanResponsePacket pkt, Supplier<NetworkEvent.Context> ctxSup) {
         NetworkEvent.Context ctx = ctxSup.get();
         ServerPlayer sender = ctx.getSender();
+
         ctx.enqueueWork(() -> Modwhitelist.handleScanResponse(sender, pkt));
         ctx.setPacketHandled(true);
     }
