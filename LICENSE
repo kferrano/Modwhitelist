@@ -1,0 +1,70 @@
+ModWhitelist License
+
+Copyright (c) 2026 kferrano
+
+All rights reserved.
+
+Permission is granted to download, use, and inspect the ModWhitelist source code and compiled releases for personal, educational, development, server administration, and modpack purposes, subject to the following conditions:
+
+1. Modpack Usage
+
+ModWhitelist may be included in public or private modpacks.
+
+Modpacks distributed through platforms such as CurseForge, Modrinth, or similar mod hosting platforms may include ModWhitelist using the platform's official dependency, project reference, manifest, or modpack distribution system.
+
+Modpack authors are not required to request additional permission to include an official release of ModWhitelist in their modpack.
+
+Including ModWhitelist in a modpack does not grant permission to redistribute, reupload, mirror, or republish ModWhitelist itself as a separate standalone project or download.
+
+2. Official Distribution
+
+Official releases of ModWhitelist may be distributed by the copyright holder through platforms including, but not limited to:
+
+* CurseForge
+* Modrinth
+* GitHub
+* other platforms explicitly chosen by the copyright holder
+
+The availability of ModWhitelist on one platform does not grant third parties permission to upload or redistribute the project on another platform.
+
+3. Redistribution
+
+Redistribution, mirroring, or reuploading of original or modified ModWhitelist JAR files as standalone downloads is not permitted without explicit permission from the copyright holder.
+
+This includes, but is not limited to:
+
+* third-party mod hosting platforms
+* file hosting services
+* download mirrors
+* third-party GitHub releases
+* standalone download collections
+
+This restriction does not apply when ModWhitelist is included as part of a legitimate modpack in accordance with Section 1.
+
+4. Source Code
+
+The source code may be viewed, studied, and modified for personal or private use.
+
+Publishing, redistributing, or releasing modified versions, forks, ports, or derivative works of ModWhitelist requires explicit permission from the copyright holder.
+
+Public GitHub forks created for the purpose of contributing changes back to the original ModWhitelist project are permitted.
+
+5. Contributions
+
+By submitting a contribution to the ModWhitelist project, you agree that your contribution may be incorporated into and distributed as part of ModWhitelist under this license.
+
+6. Commercial Use
+
+Selling ModWhitelist, modified versions of ModWhitelist, or access to ModWhitelist itself is prohibited without explicit permission from the copyright holder.
+
+This restriction does not prohibit the use of ModWhitelist on monetized Minecraft servers, provided that ModWhitelist itself is not being sold.
+
+7. No Warranty
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE.
+
+8. Additional Permission
+
+Any use not explicitly permitted by this license requires prior permission from the copyright holder.
