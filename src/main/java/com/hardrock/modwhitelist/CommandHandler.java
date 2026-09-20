@@ -21,64 +21,64 @@ public final class CommandHandler {
                                 .executes(ctx -> {
                                     Modwhitelist.reloadConfig();
                                     ctx.getSource().sendSuccess(
-                                            Component.literal("[Modwhitelist] Config reloaded."),
+                                            Component.literal("[Modwhitelist] Configs reloaded."),
                                             true
                                     );
                                     return 1;
                                 })
                         )
 
-                        .then(Commands.literal("generate")
+                        .then(Commands.literal("init")
                                 .executes(ctx -> {
                                     try {
-                                        Modwhitelist.generateAndWriteHardcoreConfig();
-
-                                        // reload to reflect the saved file (optional, but clean)
-                                        Modwhitelist.reloadConfig();
-
-                                        Modwhitelist.Config c = getCurrentConfigForInfo();
-                                        int allowed = (c == null || c.allowed == null) ? 0 : c.allowed.size();
-                                        int files = (c == null || c.allowedFiles == null) ? 0 : c.allowedFiles.size();
-
+                                        Modwhitelist.initializeEmptyConfigs();
                                         ctx.getSource().sendSuccess(
-                                                Component.literal(
-                                                        "[Modwhitelist] Generated and wrote modwhitelist.json. allowed=" + allowed + ", allowedFiles=" + files
-                                                ),
+                                                Component.literal("[Modwhitelist] Initialized multi-file configs."),
                                                 true
                                         );
-                                    } catch (Exception ex) {
+                                        return 1;
+                                    } catch (Exception e) {
+                                        LOGGER.error("[Modwhitelist] Failed to initialize configs", e);
                                         ctx.getSource().sendFailure(
-                                                Component.literal("[Modwhitelist] Generate failed: " + ex.getMessage())
+                                                Component.literal("[Modwhitelist] Failed to initialize configs. Check server log.")
                                         );
+                                        return 0;
                                     }
-                                    return 1;
                                 })
                         )
 
-
-
-                        .then(Commands.literal("collectclientonly")
-                                .then(Commands.literal("on").executes(ctx -> {
-                                    Modwhitelist.setCollectClientOnly(true);
-                                    Modwhitelist.setStrict(false);
-                                    ctx.getSource().sendSuccess( Component.literal("[Modwhitelist] collectClientOnly enabled."), true);
-                                    return 1;
-                                }))
-                                .then(Commands.literal("off").executes(ctx -> {
-                                    Modwhitelist.setCollectClientOnly(false);
-                                    Modwhitelist.setStrict(true);
-
-                                    ctx.getSource().sendSuccess( Component.literal("[Modwhitelist] collectClientOnly disabled."), true);
-                                    return 1;
-                                }))
-                        )
-
-                        .then(Commands.literal("clear")
-                                .executes(ctx -> {
-                                    Modwhitelist.clearClientOnlyFiles();
-                                    ctx.getSource().sendSuccess( Component.literal("[Modwhitelist] Cleared clientOnlyFiles."), true);
-                                    return 1;
-                                })
+                        .then(Commands.literal("collect")
+                                .then(Commands.literal("on")
+                                        .executes(ctx -> {
+                                            Modwhitelist.setCollectMode(true);
+                                            ctx.getSource().sendSuccess(
+                                                    Component.literal("[Modwhitelist] collectMode = true (strict=false)"),
+                                                    true
+                                            );
+                                            return 1;
+                                        })
+                                )
+                                .then(Commands.literal("off")
+                                        .executes(ctx -> {
+                                            Modwhitelist.setCollectMode(false);
+                                            Modwhitelist.setStrict(true);
+                                            ctx.getSource().sendSuccess(
+                                                    Component.literal("[Modwhitelist] collectMode = false"),
+                                                    true
+                                            );
+                                            return 1;
+                                        })
+                                )
+                                .then(Commands.literal("clear")
+                                        .executes(ctx -> {
+                                            Modwhitelist.clearAutoCollectedManifests();
+                                            ctx.getSource().sendSuccess(
+                                                    Component.literal("[Modwhitelist] Cleared both_side_required, client_optional and server_only."),
+                                                    true
+                                            );
+                                            return 1;
+                                        })
+                                )
                         )
         );
     }
@@ -86,17 +86,4 @@ public final class CommandHandler {
     private static boolean isAdmin(CommandSourceStack src) {
         return src.hasPermission(3);
     }
-
-    private static Modwhitelist.Config getCurrentConfigForInfo() {
-        try {
-            // Not elegant, but avoids exposing internal fields: just reload and rely on Modwhitelist internals
-            // If you want it cleaner: add a public getter in Modwhitelist.
-            java.lang.reflect.Field f = Modwhitelist.class.getDeclaredField("config");
-            f.setAccessible(true);
-            return (Modwhitelist.Config) f.get(null);
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
 }
