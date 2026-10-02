@@ -17,10 +17,19 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class Net {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_PACKET_BYTES = 24_000;
+    private static final ExecutorService CLIENT_SCAN_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "ModWhitelist-ClientScan");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private Net() {}
 
@@ -35,21 +44,39 @@ public final class Net {
                 ModScanRequestPayload.TYPE,
                 ModScanRequestPayload.STREAM_CODEC,
                 (payload, ctx) -> {
-                    try {
-                        List<String> modIds = ModList.get().getMods().stream()
-                                .map(m -> m.getModId())
-                                .filter(Objects::nonNull)
-                                .map(s -> s.toLowerCase(Locale.ROOT))
-                                .distinct()
-                                .sorted()
-                                .collect(Collectors.toList());
+                    List<String> modIds = ModList.get().getMods().stream()
+                            .map(m -> m.getModId())
+                            .filter(Objects::nonNull)
+                            .map(s -> s.toLowerCase(Locale.ROOT))
+                            .distinct()
+                            .sorted()
+                            .collect(Collectors.toList());
 
-                        List<ModScanResponsePayload.FileHash> files = scanModsFolder();
+                    long started = System.nanoTime();
 
-                        sendChunkedResponse(payload.nonce(), modIds, files);
-                    } catch (Exception ex) {
+                    CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return scanModsFolder();
+                        } catch (Exception ex) {
+                            throw new CompletionException(ex);
+                        }
+                    }, CLIENT_SCAN_EXECUTOR).thenAccept(files -> {
+                        long durationMs = (System.nanoTime() - started) / 1_000_000L;
+
+                        LOGGER.info(
+                                "[Modwhitelist] Client scan completed in {} ms ({} mods, {} files)",
+                                durationMs,
+                                modIds.size(),
+                                files.size()
+                        );
+
+                        ctx.enqueueWork(() ->
+                                sendChunkedResponse(payload.nonce(), modIds, files)
+                        );
+                    }).exceptionally(ex -> {
                         LOGGER.error("[Modwhitelist] Client scan failed", ex);
-                    }
+                        return null;
+                    });
                 }
         );
 
