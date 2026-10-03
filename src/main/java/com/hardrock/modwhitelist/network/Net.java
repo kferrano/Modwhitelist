@@ -10,6 +10,8 @@ import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
+
 import org.slf4j.Logger;
 
 import java.io.InputStream;
@@ -70,9 +72,13 @@ public final class Net {
                                 files.size()
                         );
 
-                        ctx.enqueueWork(() ->
-                                sendChunkedResponse(payload.nonce(), modIds, files)
-                        );
+                        ctx.enqueueWork(() -> {
+                            if (!ctx.connection().isConnected()) {
+                                LOGGER.debug("[[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
+                                return;
+                            }
+                            sendChunkedResponse(ctx, payload.nonce(), modIds, files);
+                        });
                     }).exceptionally(ex -> {
                         LOGGER.error("[Modwhitelist] Client scan failed", ex);
                         return null;
@@ -96,7 +102,7 @@ public final class Net {
         PacketDistributor.sendToPlayer(player, new ModScanRequestPayload(nonce));
     }
 
-    private static void sendChunkedResponse(long nonce,
+    private static void sendChunkedResponse(IPayloadContext ctx, long nonce,
                                             List<String> modIds,
                                             List<ModScanResponsePayload.FileHash> files) {
         List<String> modChunk = new ArrayList<>();
@@ -105,8 +111,9 @@ public final class Net {
 
         for (String modId : modIds) {
             int itemBytes = ModScanChunkPayload.estimateModIdBytes(modId);
+
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                flushChunk(nonce, false, modChunk, fileChunk);
+                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) return;
                 estimatedBytes = ModScanChunkPayload.basePacketBytes();
             }
             modChunk.add(modId);
@@ -115,22 +122,28 @@ public final class Net {
 
         for (ModScanResponsePayload.FileHash file : files) {
             int itemBytes = ModScanChunkPayload.estimateFileBytes(file);
+
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                flushChunk(nonce, false, modChunk, fileChunk);
+                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) return;
                 estimatedBytes = ModScanChunkPayload.basePacketBytes();
             }
             fileChunk.add(file);
             estimatedBytes += itemBytes;
         }
 
-        flushChunk(nonce, true, modChunk, fileChunk);
+        flushChunk(ctx, nonce, true, modChunk, fileChunk);
     }
 
-    private static void flushChunk(long nonce,
+    private static boolean flushChunk(IPayloadContext ctx, long nonce,
                                    boolean done,
                                    List<String> modChunk,
                                    List<ModScanResponsePayload.FileHash> fileChunk) {
-        PacketDistributor.sendToServer(new ModScanChunkPayload(
+        if (!ctx.connection().isConnected()) {
+            LOGGER.debug("[Modwhitelist] Client disconnected during scan response. Remaining chunks discarded.");
+            return false;
+        }
+
+        ctx.reply(new ModScanChunkPayload(
                 nonce,
                 done,
                 List.copyOf(modChunk),
@@ -139,6 +152,7 @@ public final class Net {
 
         modChunk.clear();
         fileChunk.clear();
+        return true;
     }
 
     private static List<ModScanResponsePayload.FileHash> scanModsFolder() throws Exception {
