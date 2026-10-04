@@ -44,3 +44,7 @@ tasks.named('processResources').configure {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
+
+tasks.named('jar', Jar).configure {
+    from rootProject.file('LICENSE')
+}
