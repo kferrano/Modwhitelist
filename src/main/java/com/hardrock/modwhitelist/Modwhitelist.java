@@ -3,10 +3,13 @@ package com.hardrock.modwhitelist;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
+import com.google.gson.JsonParseException;
+
 import com.hardrock.modwhitelist.network.Net;
 import com.hardrock.modwhitelist.network.payload.ModScanChunkPayload;
 import com.hardrock.modwhitelist.network.payload.ModScanResponsePayload;
 import com.mojang.logging.LogUtils;
+
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
@@ -19,6 +22,8 @@ import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
+
 import org.slf4j.Logger;
 import net.minecraft.network.chat.MutableComponent;
 
@@ -35,7 +40,6 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -66,6 +70,11 @@ public class Modwhitelist {
 
     private static final SecureRandom RNG = new SecureRandom();
     private static final Object CONFIG_LOCK = new Object();
+    private static final long SCAN_TIMEOUT_MS = 60_000L;
+
+    private static final int MAX_SCAN_CHUNKS = 256;
+    private static final int MAX_SCAN_MODS = 4096;
+    private static final int MAX_SCAN_FILES = 4096;
 
     private static volatile RuntimeConfig runtimeConfig = null;
     private static volatile ConfigPaths configPaths = null;
@@ -135,6 +144,15 @@ public class Modwhitelist {
             return;
         }
 
+        if (!cfg.settings.collectMode && !isConfigured(cfg)) {
+            kickSimple(
+                    sp,
+                    "ModWhitelist is not configured yet",
+                    "An administrator must run the collection/setup process first."
+            );
+            return;
+        }
+
         long nonce = RNG.nextLong();
         if (nonce == 0L) nonce = 1L;
 
@@ -150,6 +168,38 @@ public class Modwhitelist {
         }
 
         pendingScans.remove(event.getEntity().getUUID());
+    }
+
+    @SubscribeEvent
+    public void onServerTick(ServerTickEvent.Post event) {
+        if (!checksEnabled || pendingScans.isEmpty()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+
+        for (Map.Entry<UUID, PendingScan> entry : pendingScans.entrySet()) {
+            UUID playerId = entry.getKey();
+            PendingScan pending = entry.getValue();
+
+            if (now - pending.createdAtMs <= SCAN_TIMEOUT_MS) {
+                continue;
+            }
+
+            if (!pendingScans.remove(playerId, pending)) {
+                continue;
+            }
+
+            ServerPlayer player = event.getServer().getPlayerList().getPlayer(playerId);
+
+            if (player != null) {
+                kickSimple(
+                        player,
+                        "Mod scan timeout",
+                        "The client did not respond to the mod scan in time."
+                );
+            }
+        }
     }
 
     public static void handleScanChunk(ServerPlayer sp, ModScanChunkPayload payload) {
@@ -170,7 +220,7 @@ public class Modwhitelist {
         }
 
         long ageMs = System.currentTimeMillis() - pending.createdAtMs;
-        if (ageMs > 60_000L) {
+        if (ageMs > SCAN_TIMEOUT_MS) {
             pendingScans.remove(sp.getUUID());
             kickSimple(sp,
                     "Mod scan protocol error",
@@ -186,7 +236,23 @@ public class Modwhitelist {
             return;
         }
 
-        pending.modIds.addAll(payload.modIds());
+        pending.chunksReceived++;
+
+        if (pending.chunksReceived > MAX_SCAN_CHUNKS
+                || pending.mods.size() + payload.mods().size() > MAX_SCAN_MODS
+                || pending.files.size() + payload.files().size() > MAX_SCAN_FILES) {
+
+            pendingScans.remove(sp.getUUID());
+
+            kickSimple(sp,
+                    "Mod scan protocol error",
+                    "Scan data exceeded the allowed limits."
+            );
+
+            return;
+        }
+
+        pending.mods.addAll(payload.mods());
         for (ModScanResponsePayload.FileHash file : payload.files()) {
             if (file != null) pending.files.add(file);
         }
@@ -196,7 +262,7 @@ public class Modwhitelist {
         pendingScans.remove(sp.getUUID());
         handleScanResponse(sp, new ModScanResponsePayload(
                 pending.nonce,
-                List.copyOf(pending.modIds),
+                List.copyOf(pending.mods),
                 List.copyOf(pending.files)
         ));
     }
@@ -210,12 +276,11 @@ public class Modwhitelist {
             return;
         }
 
-        LinkedHashSet<String> clientIds = payload.modIds().stream()
-                .filter(Objects::nonNull)
-                .map(Modwhitelist::normalizeId)
-                .filter(s -> !s.isBlank())
-                .filter(id -> !isBuiltinId(id))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, String> clientMods =
+                toIncomingModMap(payload.mods());
+
+        LinkedHashSet<String> clientIds =
+                new LinkedHashSet<>(clientMods.keySet());
 
         Map<String, String> clientFiles = toIncomingFileMap(payload.files());
 
@@ -275,7 +340,22 @@ public class Modwhitelist {
                     "Please install the official modpack.");
             return;
         }
+        List<ManifestItem> versionCheckedMods = new ArrayList<>();
+        versionCheckedMods.addAll(cfgSnapshot2.bothRequired.mods);
+        versionCheckedMods.addAll(cfgSnapshot2.clientRequired.mods);
+        versionCheckedMods.addAll(cfgSnapshot2.clientOptional.mods);
+        List<String> versionIssues = validateModVersions(versionCheckedMods,clientMods);
 
+        if (!versionIssues.isEmpty()) {
+            kick(
+                    sp,
+                    "Wrong mod versions",
+                    versionIssues,
+                    "Please install the correct modpack version."
+            );
+
+            return;
+        }
         if (strict) {
             List<String> extras = clientIds.stream()
                     .filter(id -> !allowedInStrictIds.contains(id))
@@ -342,7 +422,7 @@ public class Modwhitelist {
                 writeJson(paths.serverOnly(), ManifestConfig.empty());
                 writeJson(paths.deny(), DenyConfig.empty());
                 loadConfig();
-            } catch (IOException e) {
+            } catch (IOException | JsonParseException e) {
                 throw new RuntimeException("Failed to initialize config files", e);
             }
         }
@@ -398,6 +478,8 @@ public class Modwhitelist {
 
     private static void loadConfig() {
         synchronized (CONFIG_LOCK) {
+            RuntimeConfig previous = runtimeConfig;
+
             try {
                 ConfigPaths paths = ensureConfigPaths();
                 Files.createDirectories(paths.dir());
@@ -412,7 +494,9 @@ public class Modwhitelist {
                 ManifestConfig serverOnly = readJson(paths.serverOnly(), ManifestConfig.class, ManifestConfig.empty());
                 DenyConfig deny = readJson(paths.deny(), DenyConfig.class, DenyConfig.empty());
 
-                runtimeConfig = buildRuntimeConfig(settings, bothRequired, clientRequired, clientOptional, serverOnly, deny);
+                RuntimeConfig loaded = buildRuntimeConfig(settings, bothRequired, clientRequired, clientOptional, serverOnly, deny);
+
+                runtimeConfig = loaded;
 
                 LOGGER.info("[Modwhitelist] Loaded configs: strict={}, strictFiles={}, singleplayerDevMode={},collectMode={}, bothRequiredMods={}, clientRequiredMods={}, clientOptionalMods={}, serverOnlyMods={}, denyMods={}",
                         runtimeConfig.settings.strict,
@@ -424,8 +508,14 @@ public class Modwhitelist {
                         runtimeConfig.clientOptional.mods.size(),
                         runtimeConfig.serverOnly.mods.size(),
                         runtimeConfig.deny.mods.size());
-            } catch (IOException e) {
+            } catch (IOException | JsonParseException e) {
                 LOGGER.error("[Modwhitelist] Failed to load config files", e);
+
+                if (previous != null) {
+                    runtimeConfig = previous;
+                    return;
+                }
+
                 runtimeConfig = buildRuntimeConfig(
                         SettingsConfig.defaultConfig(),
                         ManifestConfig.empty(),
@@ -450,7 +540,7 @@ public class Modwhitelist {
                 writeJson(paths.serverOnly(), cfg.serverOnly);
                 writeJson(paths.deny(), cfg.deny);
                 runtimeConfig = buildRuntimeConfig(cfg.settings, cfg.bothRequired, cfg.clientRequired, cfg.clientOptional, cfg.serverOnly, cfg.deny);
-            } catch (IOException e) {
+            } catch (IOException | JsonParseException e) {
                 LOGGER.error("[Modwhitelist] Failed to save config files", e);
             }
         }
@@ -499,14 +589,13 @@ public class Modwhitelist {
         Set<String> serverIds = getLoadedServerModIds();
         Map<String, String> serverFiles = getServerModsFolderFiles();
 
-        Set<String> clientIds = payload.modIds().stream()
-                .filter(Objects::nonNull)
-                .map(Modwhitelist::normalizeId)
-                .filter(s -> !s.isBlank())
-                .filter(id -> !isBuiltinId(id))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, String> clientMods = toIncomingModMap(payload.mods());
+
+        Set<String> clientIds = new LinkedHashSet<>(clientMods.keySet());
 
         Map<String, String> clientFiles = toIncomingFileMap(payload.files());
+
+        Set<String> clientRequiredIds = lowerManifestModIds(cfg.clientRequired);
 
         ManifestConfig bothRequired = new ManifestConfig();
         ManifestConfig clientOptional = new ManifestConfig();
@@ -515,12 +604,13 @@ public class Modwhitelist {
         bothRequired.mods = serverIds.stream()
                 .filter(clientIds::contains)
                 .sorted()
-                .map(Modwhitelist::manifestItem)
+                .map(id -> manifestItem(id, clientMods.get(id)))
                 .toList();
         clientOptional.mods = clientIds.stream()
                 .filter(id -> !serverIds.contains(id))
+                .filter(id -> !clientRequiredIds.contains(id))
                 .sorted()
-                .map(Modwhitelist::manifestItem)
+                .map(id -> manifestItem(id, clientMods.get(id)))
                 .toList();
         serverOnly.mods = serverIds.stream()
                 .filter(id -> !clientIds.contains(id))
@@ -731,11 +821,14 @@ public class Modwhitelist {
                 .sorted(Comparator.comparing(a -> a.name.toLowerCase(Locale.ROOT)))
                 .toList();
     }
-
     private static ManifestItem manifestItem(String modid) {
+        return manifestItem(modid, "*");
+    }
+
+    private static ManifestItem manifestItem(String modid,String version) {
         ManifestItem item = new ManifestItem();
         item.modid = normalizeId(modid);
-        item.version = "*";
+        item.version = version == null || version.isBlank() ? "*" : version.trim();
         return item;
     }
 
@@ -757,6 +850,37 @@ public class Modwhitelist {
         return out;
     }
 
+    private static Map<String, String> toIncomingModMap(
+            Collection<ModScanResponsePayload.ModEntry> incoming
+    ) {
+        Map<String, String> out = new LinkedHashMap<>();
+
+        if (incoming == null) {
+            return out;
+        }
+
+        for (ModScanResponsePayload.ModEntry mod : incoming) {
+            if (mod == null || mod.modid() == null) {
+                continue;
+            }
+
+            String modid = normalizeId(mod.modid());
+
+            if (modid.isBlank() || isBuiltinId(modid)) {
+                continue;
+            }
+
+            String version =
+                    mod.version() == null
+                            ? ""
+                            : mod.version().trim();
+
+            out.put(modid, version);
+        }
+
+        return out;
+    }
+
     private static Map<String, String> toIncomingFileMap(Collection<ModScanResponsePayload.FileHash> incoming) {
         Map<String, String> out = new LinkedHashMap<>();
         if (incoming == null) return out;
@@ -771,12 +895,15 @@ public class Modwhitelist {
 
     private static List<FileRule> intersectFileMaps(Map<String, String> left, Map<String, String> right) {
         List<FileRule> out = new ArrayList<>();
+
         for (Map.Entry<String, String> entry : left.entrySet()) {
-            String otherHash = right.get(entry.getKey());
-            if (otherHash == null) continue;
+            String leftHash = entry.getValue();
+            String rightHash = right.get(entry.getKey());
+            if (rightHash == null) continue;
+            if (!leftHash.equalsIgnoreCase(rightHash)) continue;
             FileRule rule = new FileRule();
             rule.name = entry.getKey();
-            rule.sha256 = otherHash;
+            rule.sha256 = leftHash.toLowerCase(Locale.ROOT);
             out.add(rule);
         }
         return dedupeFiles(out);
@@ -785,13 +912,64 @@ public class Modwhitelist {
     private static List<FileRule> subtractFiles(Map<String, String> left, Map<String, String> right) {
         List<FileRule> out = new ArrayList<>();
         for (Map.Entry<String, String> entry : left.entrySet()) {
-            if (right.containsKey(entry.getKey())) continue;
+            String otherHash = right.get(entry.getKey());
+            if (otherHash != null && entry.getValue().equalsIgnoreCase(otherHash)) continue;
             FileRule rule = new FileRule();
             rule.name = entry.getKey();
-            rule.sha256 = entry.getValue();
+            rule.sha256 = entry.getValue().toLowerCase(Locale.ROOT);
             out.add(rule);
         }
         return dedupeFiles(out);
+    }
+
+    private static List<String> validateModVersions(
+            Collection<ManifestItem> expectedMods,
+            Map<String, String> clientMods
+    ) {
+        List<String> issues = new ArrayList<>();
+
+        if (expectedMods == null || clientMods == null) {
+            return issues;
+        }
+
+        for (ManifestItem item : expectedMods) {
+            if (item == null || item.modid == null) {
+                continue;
+            }
+
+            String modid = normalizeId(item.modid);
+
+            if (modid.isBlank()) {
+                continue;
+            }
+
+            String expectedVersion = item.version == null || item.version.isBlank()
+                            ? "*"
+                            : item.version.trim();
+
+            if ("*".equals(expectedVersion)) {
+                continue;
+            }
+
+            String actualVersion = clientMods.get(modid);
+
+            if (actualVersion == null) {
+                continue;
+            }
+
+            if (!expectedVersion.equals(actualVersion)) {
+                issues.add(
+                        modid
+                                + " (expected "
+                                + expectedVersion
+                                + ", got "
+                                + actualVersion
+                                + ")"
+                );
+            }
+        }
+
+        return issues;
     }
 
     private static List<String> validateRequiredFiles(Map<String, String> expected, Map<String, String> got) {
@@ -822,12 +1000,14 @@ public class Modwhitelist {
 
     private static boolean matchesAnyDenyFile(String fileName, String fileHash, List<FileRule> denyRules) {
         if (denyRules == null || denyRules.isEmpty()) return false;
+        String normalizedFileName = fileName.toLowerCase(Locale.ROOT);
         for (FileRule rule : denyRules) {
             if (rule == null || rule.name == null || rule.name.isBlank()) continue;
-            if (!fileName.matches(globToRegex(rule.name.toLowerCase(Locale.ROOT)))) continue;
+            String normalizedRule = rule.name.trim().toLowerCase(Locale.ROOT);
+            if (!normalizedFileName.matches(globToRegex(normalizedRule))) continue;
 
-            String expectedHash = rule.sha256 == null ? "" : rule.sha256.trim().toLowerCase(Locale.ROOT);
-            if (expectedHash.isBlank() || expectedHash.equals("*")) return true;
+            String expectedHash = rule.sha256 == null ? "*" : rule.sha256.trim().toLowerCase(Locale.ROOT);
+            if (expectedHash.isBlank() || "*".equals(expectedHash)) return true;
             if (expectedHash.equals(fileHash)) return true;
         }
         return false;
@@ -851,7 +1031,8 @@ public class Modwhitelist {
                 for (Path path : ds) {
                     if (!Files.isRegularFile(path)) continue;
                     String name = path.getFileName().toString();
-                    if (!(name.endsWith(".jar") || name.endsWith(".zip"))) continue;
+                    String lowerName = name.toLowerCase(Locale.ROOT);
+                    if (!(lowerName.endsWith(".jar") || lowerName.endsWith(".zip"))) continue;
                     out.put(name, sha256Hex(path));
                 }
             }
@@ -935,7 +1116,7 @@ public class Modwhitelist {
     }
 
     private static boolean isBuiltinId(String id) {
-        return "minecraft".equals(id) || "neoforge".equals(id) || id.startsWith("fml");
+        return "minecraft".equals(id) || "neoforge".equals(id);
     }
 
     private static String globToRegex(String glob) {
@@ -963,7 +1144,10 @@ public class Modwhitelist {
     private static final class PendingScan {
         private final long nonce;
         private final long createdAtMs;
-        private final List<String> modIds = new ArrayList<>();
+
+        private int chunksReceived = 0;
+
+        private final List<ModScanResponsePayload.ModEntry> mods = new ArrayList<>();
         private final List<ModScanResponsePayload.FileHash> files = new ArrayList<>();
 
         private PendingScan(long nonce, long createdAtMs) {
@@ -982,6 +1166,17 @@ public class Modwhitelist {
             Path deny,
             Path legacyFile
     ) {}
+
+    private static boolean isConfigured(RuntimeConfig cfg) {
+        return !cfg.bothRequired.mods.isEmpty()
+                || !cfg.clientRequired.mods.isEmpty()
+                || !cfg.clientOptional.mods.isEmpty()
+                || !cfg.bothRequired.files.isEmpty()
+                || !cfg.clientRequired.files.isEmpty()
+                || !cfg.clientOptional.files.isEmpty()
+                || !cfg.deny.mods.isEmpty()
+                || !cfg.deny.files.isEmpty();
+    }
 
     public static final class RuntimeConfig {
         public SettingsConfig settings;

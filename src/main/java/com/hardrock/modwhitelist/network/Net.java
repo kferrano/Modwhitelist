@@ -35,7 +35,7 @@ public final class Net {
 
     private Net() {}
 
-    public static final String PROTOCOL = "2";
+    public static final String PROTOCOL = "3";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
@@ -46,13 +46,19 @@ public final class Net {
                 ModScanRequestPayload.TYPE,
                 ModScanRequestPayload.STREAM_CODEC,
                 (payload, ctx) -> {
-                    List<String> modIds = ModList.get().getMods().stream()
-                            .map(m -> m.getModId())
-                            .filter(Objects::nonNull)
-                            .map(s -> s.toLowerCase(Locale.ROOT))
-                            .distinct()
-                            .sorted()
-                            .collect(Collectors.toList());
+                    List<ModScanResponsePayload.ModEntry> mods =
+                            ModList.get().getMods().stream()
+                                    .filter(Objects::nonNull)
+                                    .map(m -> new ModScanResponsePayload.ModEntry(
+                                            m.getModId().toLowerCase(Locale.ROOT),
+                                            m.getVersion().toString()
+                                    ))
+                                    .filter(m -> !m.modid().isBlank())
+                                    .distinct()
+                                    .sorted(Comparator.comparing(
+                                            ModScanResponsePayload.ModEntry::modid
+                                    ))
+                                    .collect(Collectors.toList());
 
                     long started = System.nanoTime();
 
@@ -68,16 +74,16 @@ public final class Net {
                         LOGGER.info(
                                 "[Modwhitelist] Client scan completed in {} ms ({} mods, {} files)",
                                 durationMs,
-                                modIds.size(),
+                                mods.size(),
                                 files.size()
                         );
 
                         ctx.enqueueWork(() -> {
                             if (!ctx.connection().isConnected()) {
-                                LOGGER.debug("[[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
+                                LOGGER.debug("[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
                                 return;
                             }
-                            sendChunkedResponse(ctx, payload.nonce(), modIds, files);
+                            sendChunkedResponse(ctx, payload.nonce(), mods, files);
                         });
                     }).exceptionally(ex -> {
                         LOGGER.error("[Modwhitelist] Client scan failed", ex);
@@ -102,21 +108,31 @@ public final class Net {
         PacketDistributor.sendToPlayer(player, new ModScanRequestPayload(nonce));
     }
 
-    private static void sendChunkedResponse(IPayloadContext ctx, long nonce,
-                                            List<String> modIds,
-                                            List<ModScanResponsePayload.FileHash> files) {
-        List<String> modChunk = new ArrayList<>();
+    private static void sendChunkedResponse(
+            IPayloadContext ctx,
+            long nonce,
+            List<ModScanResponsePayload.ModEntry> mods,
+            List<ModScanResponsePayload.FileHash> files
+    ) {
+        List<ModScanResponsePayload.ModEntry> modChunk = new ArrayList<>();
+
         List<ModScanResponsePayload.FileHash> fileChunk = new ArrayList<>();
+
         int estimatedBytes = ModScanChunkPayload.basePacketBytes();
 
-        for (String modId : modIds) {
-            int itemBytes = ModScanChunkPayload.estimateModIdBytes(modId);
+        for (ModScanResponsePayload.ModEntry mod : mods) {
+            int itemBytes = ModScanChunkPayload.estimateModBytes(mod);
 
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) return;
+
+                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) {
+                    return;
+                }
+
                 estimatedBytes = ModScanChunkPayload.basePacketBytes();
             }
-            modChunk.add(modId);
+
+            modChunk.add(mod);
             estimatedBytes += itemBytes;
         }
 
@@ -124,9 +140,14 @@ public final class Net {
             int itemBytes = ModScanChunkPayload.estimateFileBytes(file);
 
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) return;
+
+                if (!flushChunk(ctx, nonce, false, modChunk, fileChunk)) {
+                    return;
+                }
+
                 estimatedBytes = ModScanChunkPayload.basePacketBytes();
             }
+
             fileChunk.add(file);
             estimatedBytes += itemBytes;
         }
@@ -134,21 +155,13 @@ public final class Net {
         flushChunk(ctx, nonce, true, modChunk, fileChunk);
     }
 
-    private static boolean flushChunk(IPayloadContext ctx, long nonce,
-                                   boolean done,
-                                   List<String> modChunk,
-                                   List<ModScanResponsePayload.FileHash> fileChunk) {
+    private static boolean flushChunk(IPayloadContext ctx, long nonce, boolean done, List<ModScanResponsePayload.ModEntry> modChunk, List<ModScanResponsePayload.FileHash> fileChunk) {
         if (!ctx.connection().isConnected()) {
             LOGGER.debug("[Modwhitelist] Client disconnected during scan response. Remaining chunks discarded.");
             return false;
         }
 
-        ctx.reply(new ModScanChunkPayload(
-                nonce,
-                done,
-                List.copyOf(modChunk),
-                List.copyOf(fileChunk)
-        ));
+        ctx.reply(new ModScanChunkPayload(nonce, done, List.copyOf(modChunk), List.copyOf(fileChunk)));
 
         modChunk.clear();
         fileChunk.clear();
@@ -166,7 +179,8 @@ public final class Net {
                 if (!Files.isRegularFile(p)) continue;
 
                 String name = p.getFileName().toString();
-                if (!(name.endsWith(".jar") || name.endsWith(".zip"))) continue;
+                String lowerName = name.toLowerCase(Locale.ROOT);
+                if (!(lowerName.endsWith(".jar") || lowerName.endsWith(".zip"))) continue;
 
                 out.add(new ModScanResponsePayload.FileHash(name, sha256Hex(p)));
             }
