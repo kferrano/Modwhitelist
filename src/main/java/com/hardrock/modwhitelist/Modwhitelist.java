@@ -405,6 +405,11 @@ public class Modwhitelist {
 
         LOGGER.info("[Modwhitelist] {} passed mod check ({} mods, {} files)",
                 sp.getGameProfile().getName(), clientIds.size(), payload.files().size());
+
+        if (cfg.settings.updateCheck) {
+            boolean singleplayerDev = !dedicatedServer && cfg.settings.singleplayerDevMode;
+            UpdateChecker.checkAndNotify(sp, singleplayerDev);
+        }
     }
     public static void reloadConfig() {
         loadConfig();
@@ -1200,6 +1205,7 @@ public class Modwhitelist {
         public boolean strictFiles = true;
         public boolean collectMode = false;
         public boolean singleplayerDevMode = false;
+        public boolean updateCheck = true;
         public List<String> collectWhitelist = new ArrayList<>();
         public String customMessage = "Please use the official modpack.";
         public String packLink = "";
@@ -1218,6 +1224,11 @@ public class Modwhitelist {
                     "- singleplayerDevMode=false disables ModWhitelist checks in normal singleplayer",
                     "- singleplayerDevMode=true enables full ModWhitelist checks on integrated servers for development/testing",
                     "- dedicated servers always have ModWhitelist checks enabled",
+                    "",
+                    "Update checker:",
+                    "- updateCheck=true checks for ModWhitelist updates when an OP joins",
+                    "- update checks are cached for 6 hours",
+                    "- only operators receive update notifications",
                     "",
                     "Collect workflow:",
                     "- set collectMode:true and add your UUID to collectWhitelist",
