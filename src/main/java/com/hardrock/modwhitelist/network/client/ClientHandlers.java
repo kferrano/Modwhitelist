@@ -2,97 +2,122 @@ package com.hardrock.modwhitelist.network.client;
 
 import com.hardrock.modwhitelist.network.Net;
 import com.hardrock.modwhitelist.network.packet.ModScanChunkPacket;
+import com.hardrock.modwhitelist.network.packet.ModScanResponsePacket;
+import com.mojang.logging.LogUtils;
+import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.loading.FMLPaths;
+import org.slf4j.Logger;
 
 import java.io.InputStream;
 import java.nio.file.*;
 import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class ClientHandlers {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_PACKET_BYTES = 24_000;
+    private static final ExecutorService CLIENT_SCAN_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "ModWhitelist-ClientScan");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private ClientHandlers() {}
 
-    public static void init() {
-        // no-op; class-load barrier only
-    }
+    public static void init() {}
 
     public static void onScanRequest(long nonce) {
-        // 1) Mod IDs
-        List<String> ids = ModList.get().getMods().stream()
-                .map(m -> m.getModId())
+        List<ModScanResponsePacket.ModEntry> mods = ModList.get().getMods().stream()
+                .filter(Objects::nonNull)
+                .map(m -> new ModScanResponsePacket.ModEntry(
+                        m.getModId().toLowerCase(Locale.ROOT),
+                        m.getVersion().toString()
+                ))
+                .filter(m -> !m.modid().isBlank())
                 .distinct()
-                .sorted(String::compareToIgnoreCase)
+                .sorted(Comparator.comparing(ModScanResponsePacket.ModEntry::modid))
                 .toList();
-
-        // 2) /mods file list (jar/zip) with sha256
-        List<ModScanChunkPacket.FileHash> files = new ArrayList<>();
-        try {
-            Path modsDir = FMLPaths.MODSDIR.get();
-            if (Files.isDirectory(modsDir)) {
-                try (DirectoryStream<Path> ds = Files.newDirectoryStream(modsDir)) {
-                    for (Path p : ds) {
-                        if (!Files.isRegularFile(p)) continue;
-                        String name = p.getFileName().toString();
-                        if (!(name.endsWith(".jar") || name.endsWith(".zip"))) continue;
-
-                        String sha = sha256Hex(p);
-                        files.add(new ModScanChunkPacket.FileHash(name, sha));
-                    }
-                }
+        long started = System.nanoTime();
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return scanModsFolder();
+            } catch (Exception ex) {
+                throw new CompletionException(ex);
             }
-        } catch (Exception ignored) {}
-
-        files.sort(Comparator.comparing(f -> f.name().toLowerCase()));
-
-        sendChunkedResponse(nonce, ids, files);
+        }, CLIENT_SCAN_EXECUTOR).thenAccept(files -> {
+            long durationMs = (System.nanoTime() - started) / 1_000_000L;
+            LOGGER.info("[Modwhitelist] Client scan completed in {} ms ({} mods, {} files)", durationMs, mods.size(), files.size());
+            Minecraft.getInstance().execute(() -> {
+                if (Minecraft.getInstance().getConnection() == null
+                        || !Minecraft.getInstance().getConnection().getConnection().isConnected()) {
+                    LOGGER.debug("[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
+                    return;
+                }
+                sendChunkedResponse(nonce, mods, files);
+            });
+        }).exceptionally(ex -> {
+            LOGGER.error("[Modwhitelist] Client scan failed", ex);
+            return null;
+        });
     }
 
-    private static void sendChunkedResponse(long nonce, List<String> ids, List<ModScanChunkPacket.FileHash> files) {
-        List<String> modChunk = new ArrayList<>();
+    private static List<ModScanChunkPacket.FileHash> scanModsFolder() throws Exception {
+        Path modsDir = FMLPaths.MODSDIR.get();
+        if (!Files.isDirectory(modsDir)) return List.of();
+        List<ModScanChunkPacket.FileHash> files = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(modsDir)) {
+            for (Path p : ds) {
+                if (!Files.isRegularFile(p)) continue;
+                String name = p.getFileName().toString();
+                String lowerName = name.toLowerCase(Locale.ROOT);
+                if (!(lowerName.endsWith(".jar") || lowerName.endsWith(".zip"))) continue;
+                files.add(new ModScanChunkPacket.FileHash(name, sha256Hex(p)));
+            }
+        }
+        files.sort(Comparator.comparing(f -> f.name().toLowerCase(Locale.ROOT)));
+        return files;
+    }
+
+    private static void sendChunkedResponse(long nonce, List<ModScanResponsePacket.ModEntry> mods, List<ModScanChunkPacket.FileHash> files) {
+        List<ModScanResponsePacket.ModEntry> modChunk = new ArrayList<>();
         List<ModScanChunkPacket.FileHash> fileChunk = new ArrayList<>();
         int estimatedBytes = ModScanChunkPacket.basePacketBytes();
-
-        for (String id : ids) {
-            int itemBytes = ModScanChunkPacket.estimateModIdBytes(id);
+        for (ModScanResponsePacket.ModEntry mod : mods) {
+            int itemBytes = ModScanChunkPacket.estimateModBytes(mod);
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                flushChunk(nonce, false, modChunk, fileChunk);
+                if (!flushChunk(nonce, false, modChunk, fileChunk)) return;
                 estimatedBytes = ModScanChunkPacket.basePacketBytes();
             }
-            modChunk.add(id);
+            modChunk.add(mod);
             estimatedBytes += itemBytes;
         }
-
         for (ModScanChunkPacket.FileHash file : files) {
             int itemBytes = ModScanChunkPacket.estimateFileBytes(file);
             if ((!modChunk.isEmpty() || !fileChunk.isEmpty()) && estimatedBytes + itemBytes > MAX_PACKET_BYTES) {
-                flushChunk(nonce, false, modChunk, fileChunk);
+                if (!flushChunk(nonce, false, modChunk, fileChunk)) return;
                 estimatedBytes = ModScanChunkPacket.basePacketBytes();
             }
             fileChunk.add(file);
             estimatedBytes += itemBytes;
         }
-
         flushChunk(nonce, true, modChunk, fileChunk);
     }
 
-    private static void flushChunk(long nonce,
-                                   boolean done,
-                                   List<String> modChunk,
-                                   List<ModScanChunkPacket.FileHash> fileChunk) {
-        Net.CHANNEL.sendToServer(new ModScanChunkPacket(
-                nonce,
-                done,
-                List.copyOf(modChunk),
-                List.copyOf(fileChunk)
-        ));
-
+    private static boolean flushChunk(long nonce, boolean done, List<ModScanResponsePacket.ModEntry> modChunk, List<ModScanChunkPacket.FileHash> fileChunk) {
+        if (Minecraft.getInstance().getConnection() == null
+                || !Minecraft.getInstance().getConnection().getConnection().isConnected()) {
+            LOGGER.debug("[Modwhitelist] Client disconnected during scan response. Remaining chunks discarded.");
+            return false;
+        }
+        Net.CHANNEL.sendToServer(new ModScanChunkPacket(nonce, done, List.copyOf(modChunk), List.copyOf(fileChunk)));
         modChunk.clear();
         fileChunk.clear();
+        return true;
     }
 
     private static String sha256Hex(Path file) throws Exception {

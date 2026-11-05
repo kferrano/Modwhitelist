@@ -7,14 +7,16 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
+import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
-public final class Net {
-    private static final String PROTOCOL = "2";
-    private static int id = 0;
+import java.util.Optional;
 
+public final class Net {
+    public static final String PROTOCOL = "3";
+    private static int id = 0;
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.tryBuild(Modwhitelist.MODID, "main"),
             () -> PROTOCOL,
@@ -30,20 +32,18 @@ public final class Net {
                 ModScanRequestPacket.class,
                 ModScanRequestPacket::encode,
                 ModScanRequestPacket::decode,
-                ModScanRequestPacket::handle
+                ModScanRequestPacket::handle,
+                Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
-
         CHANNEL.registerMessage(
                 id++,
                 ModScanChunkPacket.class,
                 ModScanChunkPacket::encode,
                 ModScanChunkPacket::decode,
-                ModScanChunkPacket::handle
+                ModScanChunkPacket::handle,
+                Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
-
-        DistExecutor.safeRunWhenOn(Dist.CLIENT,
-                () -> com.hardrock.modwhitelist.network.client.ClientHandlers::init
-        );
+        DistExecutor.safeRunWhenOn(Dist.CLIENT, () -> com.hardrock.modwhitelist.network.client.ClientHandlers::init);
     }
 
     public static void sendTo(ServerPlayer player, Object msg) {

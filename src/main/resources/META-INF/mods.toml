@@ -21,7 +21,9 @@ optional client-only mod support, SHA-256 file verification,
 automatic modpack generation, and a safe setup/collection workflow.
 
 This project is the official successor to Mod Whitelist (Server) for modern Minecraft versions.
-No analytics, no tracking, and no third-party services are used.'''
+No analytics or tracking is used.
+When enabled, the update checker contacts GitHub to retrieve a plain-text version number.
+No gameplay data, mod list, file hashes, player data, or other information is sent to GitHub.'''
 
 [[dependencies."${mod_id}"]]
 modId = "forge"
