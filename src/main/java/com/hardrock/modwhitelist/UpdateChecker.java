@@ -8,6 +8,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.commands.Commands;
 
 import net.neoforged.fml.ModList;
 
@@ -27,7 +28,7 @@ import java.util.regex.Pattern;
 
 public final class UpdateChecker {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String VERSION_URL = "https://raw.githubusercontent.com/kferrano/Curseforge_Updates/main/modwhitelist1.21.txt";
+    private static final String VERSION_URL = "https://raw.githubusercontent.com/kferrano/Curseforge_Updates/main/modwhitelist1.21.11.txt";
     private static final String DOWNLOAD_URL = "https://www.curseforge.com/minecraft/mc-mods/mod-whitelist-forgeneoforge";
     private static final long CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L;
     private static final long FAILURE_RETRY_MS = 15L * 60L * 1000L;
@@ -44,8 +45,8 @@ public final class UpdateChecker {
     private UpdateChecker() {}
 
     public static void checkAndNotify(ServerPlayer player, boolean allowNonOp) {
-        if (!allowNonOp && !player.hasPermissions(2) ) return;
-        MinecraftServer server = player.getServer();
+        if (!allowNonOp && !isOperator(player)) return;
+        MinecraftServer server = player.level().getServer();
         if (server == null) return;
         String cachedLatest = latestVersion;
         if (cachedLatest != null) notifyIfNewer(player, cachedLatest);
@@ -90,7 +91,7 @@ public final class UpdateChecker {
                 }
                 server.execute(() -> {
                     ServerPlayer onlinePlayer = server.getPlayerList().getPlayer(playerId);
-                    if (onlinePlayer != null && (allowNonOp || onlinePlayer.hasPermissions(2))) notifyIfNewer(onlinePlayer, remoteVersion);
+                    if (onlinePlayer != null && (allowNonOp || isOperator(onlinePlayer))) notifyIfNewer(onlinePlayer, remoteVersion);
                 });
             } finally {
                 synchronized (LOCK) {
@@ -98,6 +99,10 @@ public final class UpdateChecker {
                 }
             }
         });
+    }
+
+    private static boolean isOperator(ServerPlayer player) {
+        return Commands.LEVEL_GAMEMASTERS.check(player.permissions());
     }
 
     private static void notifyIfNewer(ServerPlayer player, String remoteVersion) {
@@ -111,8 +116,8 @@ public final class UpdateChecker {
                 .append(Component.literal("Latest: " + remoteVersion + "\n").withStyle(ChatFormatting.GREEN))
                 .append(Component.literal("Download: Click here ").withStyle(style -> style
                         .withColor(ChatFormatting.BLUE).withUnderlined(true).withClickEvent(
-                                new ClickEvent(ClickEvent.Action.OPEN_URL, DOWNLOAD_URL))
-                        .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("Open CurseForge")
+                                new ClickEvent.OpenUrl(URI.create(DOWNLOAD_URL)))
+                        .withHoverEvent(new HoverEvent.ShowText(Component.literal("Open CurseForge")
                         ))
                 ));
         player.sendSystemMessage(message);

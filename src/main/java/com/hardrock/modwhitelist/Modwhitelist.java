@@ -138,7 +138,7 @@ public class Modwhitelist {
         if (cfg == null) return;
 
         if (cfg.settings.collectMode && !cfg.settings.collectWhitelistUuidSet().contains(sp.getUUID())) {
-            sp.getServer().execute(() -> sp.connection.disconnect(Component.literal(
+            sp.level().getServer().execute(() -> sp.connection.disconnect(Component.literal(
                     "Server is currently in modpack collection/setup mode.\nPlease try again later."
             )));
             return;
@@ -158,7 +158,7 @@ public class Modwhitelist {
 
         pendingScans.put(sp.getUUID(), new PendingScan(nonce, System.currentTimeMillis()));
         Net.sendScanRequest(sp, nonce);
-        LOGGER.info("[Modwhitelist] Sent scan request to {} (nonce={})", sp.getGameProfile().getName(), nonce);
+        LOGGER.info("[Modwhitelist] Sent scan request to {} (nonce={})", sp.nameAndId().name(), nonce);
     }
 
     @SubscribeEvent
@@ -404,7 +404,7 @@ public class Modwhitelist {
         }
 
         LOGGER.info("[Modwhitelist] {} passed mod check ({} mods, {} files)",
-                sp.getGameProfile().getName(), clientIds.size(), payload.files().size());
+                sp.nameAndId().name(), clientIds.size(), payload.files().size());
 
         if (cfg.settings.updateCheck) {
             boolean singleplayerDev = !dedicatedServer && cfg.settings.singleplayerDevMode;
@@ -1105,7 +1105,7 @@ public class Modwhitelist {
 
         sp.connection.disconnect(msg);
         LOGGER.warn("[Modwhitelist] Kicked {}: {} | entries={}",
-                sp.getGameProfile().getName(), title, entries == null ? 0 : entries.size());
+                sp.nameAndId().name(), title, entries == null ? 0 : entries.size());
     }
 
     private static void kickSimple(ServerPlayer sp, String title, String footer) {

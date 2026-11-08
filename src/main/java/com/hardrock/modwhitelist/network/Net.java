@@ -41,58 +41,11 @@ public final class Net {
     public static void register(RegisterPayloadHandlersEvent event) {
         final PayloadRegistrar registrar = event.registrar(PROTOCOL);
 
-        // Server -> Client (Request)
         registrar.playToClient(
                 ModScanRequestPayload.TYPE,
-                ModScanRequestPayload.STREAM_CODEC,
-                (payload, ctx) -> {
-                    List<ModScanResponsePayload.ModEntry> mods =
-                            ModList.get().getMods().stream()
-                                    .filter(Objects::nonNull)
-                                    .map(m -> new ModScanResponsePayload.ModEntry(
-                                            m.getModId().toLowerCase(Locale.ROOT),
-                                            m.getVersion().toString()
-                                    ))
-                                    .filter(m -> !m.modid().isBlank())
-                                    .distinct()
-                                    .sorted(Comparator.comparing(
-                                            ModScanResponsePayload.ModEntry::modid
-                                    ))
-                                    .collect(Collectors.toList());
-
-                    long started = System.nanoTime();
-
-                    CompletableFuture.supplyAsync(() -> {
-                        try {
-                            return scanModsFolder();
-                        } catch (Exception ex) {
-                            throw new CompletionException(ex);
-                        }
-                    }, CLIENT_SCAN_EXECUTOR).thenAccept(files -> {
-                        long durationMs = (System.nanoTime() - started) / 1_000_000L;
-
-                        LOGGER.info(
-                                "[Modwhitelist] Client scan completed in {} ms ({} mods, {} files)",
-                                durationMs,
-                                mods.size(),
-                                files.size()
-                        );
-
-                        ctx.enqueueWork(() -> {
-                            if (!ctx.connection().isConnected()) {
-                                LOGGER.debug("[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
-                                return;
-                            }
-                            sendChunkedResponse(ctx, payload.nonce(), mods, files);
-                        });
-                    }).exceptionally(ex -> {
-                        LOGGER.error("[Modwhitelist] Client scan failed", ex);
-                        return null;
-                    });
-                }
+                ModScanRequestPayload.STREAM_CODEC
         );
 
-        // Client -> Server (Chunked response)
         registrar.playToServer(
                 ModScanChunkPayload.TYPE,
                 ModScanChunkPayload.STREAM_CODEC,
@@ -102,6 +55,50 @@ public final class Net {
                     }
                 }
         );
+    }
+
+    public static void handleScanRequest(ModScanRequestPayload payload, IPayloadContext ctx) {
+        List<ModScanResponsePayload.ModEntry> mods =
+                ModList.get().getMods().stream()
+                        .filter(Objects::nonNull)
+                        .map(m -> new ModScanResponsePayload.ModEntry(
+                                m.getModId().toLowerCase(Locale.ROOT),
+                                m.getVersion().toString()
+                        ))
+                        .filter(m -> !m.modid().isBlank())
+                        .distinct()
+                        .sorted(Comparator.comparing(ModScanResponsePayload.ModEntry::modid))
+                        .collect(Collectors.toList());
+
+        long started = System.nanoTime();
+
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return scanModsFolder();
+            } catch (Exception ex) {
+                throw new CompletionException(ex);
+            }
+        }, CLIENT_SCAN_EXECUTOR).thenAccept(files -> {
+            long durationMs = (System.nanoTime() - started) / 1_000_000L;
+
+            LOGGER.info(
+                    "[Modwhitelist] Client scan completed in {} ms ({} mods, {} files)",
+                    durationMs,
+                    mods.size(),
+                    files.size()
+            );
+
+            ctx.enqueueWork(() -> {
+                if (!ctx.connection().isConnected()) {
+                    LOGGER.debug("[Modwhitelist] Client disconnected before scan response could be sent. Discarding scan result.");
+                    return;
+                }
+                sendChunkedResponse(ctx, payload.nonce(), mods, files);
+            });
+        }).exceptionally(ex -> {
+            LOGGER.error("[Modwhitelist] Client scan failed", ex);
+            return null;
+        });
     }
 
     public static void sendScanRequest(net.minecraft.server.level.ServerPlayer player, long nonce) {

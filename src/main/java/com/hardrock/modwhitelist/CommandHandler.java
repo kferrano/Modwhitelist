@@ -1,7 +1,6 @@
 package com.hardrock.modwhitelist;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -17,7 +16,7 @@ public final class CommandHandler {
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher().register(
                 Commands.literal("modwhitelist")
-                        .requires(CommandHandler::isAdmin)
+                        .requires(Commands.hasPermission(Commands.LEVEL_ADMINS))
 
                         .then(Commands.literal("reload")
                                 .executes(ctx -> {
@@ -66,9 +65,5 @@ public final class CommandHandler {
                                 )
                         )
         );
-    }
-
-    private static boolean isAdmin(CommandSourceStack src) {
-        return src.hasPermission(3);
     }
 }
